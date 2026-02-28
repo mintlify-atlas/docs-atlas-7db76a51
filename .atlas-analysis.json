@@ -1,0 +1,139 @@
+{
+  "projectType": "saas",
+  "projectName": "Sprout",
+  "projectDescription": "An AI-powered adaptive learning platform that builds personalized 3D knowledge graphs for exploring and mastering any topic.",
+  "theme": "palm",
+  "primaryColor": "#10b981",
+  "lightColor": "#34d399",
+  "darkColor": "#059669",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/knowledge-graphs",
+              "features/ai-agents",
+              "features/adaptive-learning",
+              "features/hand-tracking"
+            ]
+          },
+          {
+            "group": "Learning Experience",
+            "pages": [
+              "learning/creating-topics",
+              "learning/diagnostics",
+              "learning/tutoring",
+              "learning/progress-tracking"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/backend",
+              "architecture/frontend",
+              "architecture/database"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "AI Agents",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "agents/introduction",
+              "agents/agent-loop"
+            ]
+          },
+          {
+            "group": "Agent Types",
+            "pages": [
+              "agents/topic-agent",
+              "agents/subconcept-agent",
+              "agents/refinement-agent",
+              "agents/tutor-agent",
+              "agents/grading-agent"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/branches",
+              "api/nodes",
+              "api/assessments",
+              "api/agents",
+              "api/chat",
+              "api/progress"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "development/installation",
+              "development/configuration",
+              "development/running-locally"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "development/database-migrations",
+              "development/hand-tracking-setup",
+              "development/document-uploads"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "AI-powered personalized learning pathways",
+    "3D interactive knowledge graphs with hand tracking navigation",
+    "Multi-agent system with 7 specialized Claude-powered agents",
+    "Adaptive diagnostic assessments and concept refinement",
+    "Interactive tutoring with text, code, and drawing exercises",
+    "Document upload and context extraction for personalized learning",
+    "Real-time progress tracking and mastery scoring",
+    "Voice-powered tutoring with ElevenLabs integration"
+  ],
+  "publicApiSurface": [
+    "POST /api/branches - Create learning topic branches",
+    "GET /api/nodes/:id - Retrieve knowledge graph nodes",
+    "POST /api/agents/topics/:id/run - Generate concept pathways",
+    "POST /api/agents/concepts/:id/run - Run adaptive refinement",
+    "POST /api/chat/sessions/:id/tutor - Interactive tutoring",
+    "GET /api/assessments/:id - Retrieve diagnostic assessments",
+    "POST /api/assessments/:id/answers - Submit answers",
+    "GET /api/progress/:userId/:nodeId - Track learning progress",
+    "POST /api/nodes/:id/documents - Upload learning materials"
+  ]
+}
