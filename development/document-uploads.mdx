@@ -1,0 +1,579 @@
+---
+title: Document Uploads
+description: Setting up AWS S3 for document storage and context extraction
+---
+
+Sprout allows users to upload documents (PDFs, text files) that provide context for topic generation. Uploaded documents are stored in **AWS S3** and their text content is extracted for use by Claude agents.
+
+## Overview
+
+The document upload system:
+- Accepts PDFs and text files via multipart/form-data
+- Stores original files in S3 with unique keys
+- Extracts text content using `pdf-parse` for PDFs
+- Saves metadata and extracted text in SQLite (`topic_documents` table)
+- Provides extracted text to agents for context-aware concept generation
+
+<Note>
+  Document uploads are **optional**. Sprout works without AWS configuration, but upload features will fail.
+</Note>
+
+## AWS Setup
+
+### 1. Create an S3 Bucket
+
+<Steps>
+  <Step title="Sign in to AWS Console">
+    Navigate to the [S3 Console](https://console.aws.amazon.com/s3/).
+  </Step>
+  
+  <Step title="Create Bucket">
+    Click **Create bucket** and configure:
+    
+    - **Bucket name**: Choose a unique name (e.g., `sprout-documents-prod`)
+    - **Region**: Select your preferred region (e.g., `us-east-1`)
+    - **Block Public Access**: Keep all settings enabled (documents should be private)
+    - **Versioning**: Optional (recommended for production)
+    - **Encryption**: Enable server-side encryption (recommended)
+  </Step>
+  
+  <Step title="Create Bucket Policy (Optional)">
+    If you need to restrict access, create a bucket policy:
+    
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::YOUR_ACCOUNT_ID:user/sprout-backend"
+          },
+          "Action": [
+            "s3:PutObject",
+            "s3:GetObject",
+            "s3:DeleteObject"
+          ],
+          "Resource": "arn:aws:s3:::sprout-documents-prod/*"
+        }
+      ]
+    }
+    ```
+  </Step>
+</Steps>
+
+### 2. Create IAM User
+
+Create a dedicated IAM user for Sprout backend:
+
+<Steps>
+  <Step title="Navigate to IAM Console">
+    Go to [IAM Users](https://console.aws.amazon.com/iam/home#/users).
+  </Step>
+  
+  <Step title="Create User">
+    Click **Add users** and configure:
+    
+    - **User name**: `sprout-backend`
+    - **Access type**: Access key - Programmatic access
+  </Step>
+  
+  <Step title="Attach Permissions">
+    Create an inline policy with S3 access:
+    
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutObject",
+            "s3:GetObject",
+            "s3:DeleteObject",
+            "s3:ListBucket"
+          ],
+          "Resource": [
+            "arn:aws:s3:::sprout-documents-prod",
+            "arn:aws:s3:::sprout-documents-prod/*"
+          ]
+        }
+      ]
+    }
+    ```
+  </Step>
+  
+  <Step title="Save Credentials">
+    After creating the user, save the **Access Key ID** and **Secret Access Key**. You won't be able to view the secret again.
+    
+    <Warning>
+      Store credentials securely. Never commit them to version control.
+    </Warning>
+  </Step>
+</Steps>
+
+## Backend Configuration
+
+Add AWS credentials to your backend `.env` file:
+
+<CodeGroup>
+```bash .env
+# AWS Configuration (Required for document uploads)
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=wJalr...
+AWS_REGION=us-east-1
+AWS_S3_BUCKET=sprout-documents-prod
+```
+</CodeGroup>
+
+### Environment Variables
+
+<Tabs>
+  <Tab title="AWS_ACCESS_KEY_ID">
+    Your IAM user's access key ID.
+    
+    ```bash
+    AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+    ```
+    
+    Format: Starts with `AKIA` for long-term credentials.
+  </Tab>
+  
+  <Tab title="AWS_SECRET_ACCESS_KEY">
+    Your IAM user's secret access key.
+    
+    ```bash
+    AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    ```
+    
+    <Warning>
+      Keep this secret. Treat it like a password.
+    </Warning>
+  </Tab>
+  
+  <Tab title="AWS_REGION">
+    AWS region where your S3 bucket is located.
+    
+    ```bash
+    AWS_REGION=us-east-1
+    ```
+    
+    Common regions:
+    - `us-east-1` (N. Virginia)
+    - `us-west-2` (Oregon)
+    - `eu-west-1` (Ireland)
+    - `ap-southeast-1` (Singapore)
+  </Tab>
+  
+  <Tab title="AWS_S3_BUCKET">
+    Name of your S3 bucket (without `s3://` prefix).
+    
+    ```bash
+    AWS_S3_BUCKET=sprout-documents-prod
+    ```
+  </Tab>
+</Tabs>
+
+## Verify Configuration
+
+Test your AWS credentials using the AWS CLI:
+
+<Steps>
+  <Step title="Install AWS CLI">
+    <Tabs>
+      <Tab title="macOS">
+        ```bash
+        brew install awscli
+        ```
+      </Tab>
+      <Tab title="Linux">
+        ```bash
+        sudo apt install awscli  # Debian/Ubuntu
+        sudo yum install awscli  # RHEL/CentOS
+        ```
+      </Tab>
+      <Tab title="Windows">
+        Download from [AWS CLI Installation](https://aws.amazon.com/cli/).
+      </Tab>
+    </Tabs>
+  </Step>
+  
+  <Step title="Configure Credentials">
+    ```bash
+    aws configure
+    # Enter your Access Key ID, Secret Access Key, and region
+    ```
+  </Step>
+  
+  <Step title="Test S3 Access">
+    ```bash
+    # List bucket contents
+    aws s3 ls s3://sprout-documents-prod
+    
+    # Upload test file
+    echo "test" > test.txt
+    aws s3 cp test.txt s3://sprout-documents-prod/test.txt
+    
+    # Download test file
+    aws s3 cp s3://sprout-documents-prod/test.txt test-download.txt
+    
+    # Delete test file
+    aws s3 rm s3://sprout-documents-prod/test.txt
+    rm test.txt test-download.txt
+    ```
+    
+    If all commands succeed, your configuration is correct.
+  </Step>
+</Steps>
+
+## Upload Implementation
+
+The backend uses `@aws-sdk/client-s3` for S3 operations:
+
+### Upload Endpoint
+
+**Route**: `POST /api/nodes/:nodeId/documents`
+
+**Headers**: `Content-Type: multipart/form-data`
+
+**Body**: Form data with `file` field
+
+<CodeGroup>
+```bash cURL Example
+curl -X POST http://localhost:8000/api/nodes/node_123/documents \
+  -F "file=@/path/to/document.pdf"
+```
+
+```typescript Frontend Example
+const formData = new FormData();
+formData.append('file', fileInput.files[0]);
+
+const response = await fetch(`/backend-api/api/nodes/${nodeId}/documents`, {
+  method: 'POST',
+  body: formData,
+});
+
+const document = await response.json();
+```
+</CodeGroup>
+
+### Upload Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Backend
+    participant S3
+    participant SQLite
+    
+    Client->>Backend: POST /api/nodes/:nodeId/documents
+    Backend->>Backend: Validate file (PDF or text)
+    Backend->>S3: Upload file with unique key
+    S3-->>Backend: Return success
+    Backend->>Backend: Extract text (if PDF)
+    Backend->>SQLite: Save document metadata + text
+    SQLite-->>Backend: Return document record
+    Backend-->>Client: Return document JSON
+```
+
+### S3 Key Format
+
+Files are stored with the following key structure:
+```
+documents/{nodeId}/{uuid}-{originalFilename}
+```
+
+**Example**:
+```
+documents/node_abc123/f47ac10b-58cc-4372-a567-0e02b2c3d479-linear-algebra.pdf
+```
+
+<Info>
+  UUIDs prevent filename collisions and ensure unique keys.
+</Info>
+
+## Text Extraction
+
+The backend extracts text from uploaded documents for use by agents:
+
+### Supported Formats
+
+<Tabs>
+  <Tab title="PDF">
+    **MIME Type**: `application/pdf`
+    
+    Extracted using `pdf-parse` library:
+    ```typescript
+    import pdfParse from 'pdf-parse';
+    
+    const data = await pdfParse(buffer);
+    const text = data.text; // Extracted text
+    ```
+    
+    **Limitations**:
+    - OCR not supported (scanned PDFs won't extract)
+    - Complex layouts may not extract perfectly
+    - Images and diagrams are ignored
+  </Tab>
+  
+  <Tab title="Text Files">
+    **MIME Types**: `text/plain`, `text/markdown`, `text/csv`
+    
+    Text files are read directly:
+    ```typescript
+    const text = buffer.toString('utf-8');
+    ```
+    
+    Supports UTF-8 encoding.
+  </Tab>
+</Tabs>
+
+### Extraction Status
+
+Document extraction status is tracked in the `topic_documents` table:
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Extraction not yet attempted |
+| `completed` | Text successfully extracted |
+| `failed` | Extraction failed (error logged) |
+
+<CodeGroup>
+```sql Query Extraction Status
+SELECT 
+  original_filename,
+  extraction_status,
+  extraction_error
+FROM topic_documents
+WHERE node_id = 'node_123';
+```
+</CodeGroup>
+
+## Using Documents in Agents
+
+Agents access document context via the `extract_all_concept_contexts` tool:
+
+```typescript
+const tools = [
+  {
+    name: "extract_all_concept_contexts",
+    description: "Extract relevant sections from uploaded documents for all concepts",
+    input_schema: {
+      type: "object",
+      properties: {
+        concepts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              description: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+  },
+];
+```
+
+**Flow**:
+1. Topic Agent generates concepts
+2. Agent calls `extract_all_concept_contexts` with concept list
+3. Tool searches document text for relevant sections
+4. Extracted context is returned to agent
+5. Agent uses context to refine concept descriptions
+
+<Info>
+  Agents receive only relevant excerpts, not full document text, to stay within token limits.
+</Info>
+
+## Database Schema
+
+Documents are stored in the `topic_documents` table:
+
+```typescript schema.ts
+export const topicDocuments = sqliteTable("topic_documents", {
+  id: text("id").primaryKey(),
+  nodeId: text("node_id").notNull().references(() => nodes.id),
+  originalFilename: text("original_filename").notNull(),
+  s3Key: text("s3_key").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileSizeBytes: integer("file_size_bytes").notNull(),
+  extractedText: text("extracted_text"),
+  extractionStatus: text("extraction_status", {
+    enum: ["pending", "completed", "failed"],
+  }).notNull().default("pending"),
+  extractionError: text("extraction_error"),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+});
+```
+
+<Note>
+  The `extractedText` field can be large (up to several MB for long documents). SQLite TEXT fields support up to 1 GB.
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Upload fails with 403 Forbidden">
+    IAM user doesn't have permission to upload to S3.
+    
+    **Solution**:
+    1. Check IAM policy includes `s3:PutObject`
+    2. Verify bucket name matches policy
+    3. Test with AWS CLI:
+       ```bash
+       aws s3 cp test.txt s3://your-bucket-name/test.txt
+       ```
+  </Accordion>
+  
+  <Accordion title="Upload fails with 400 Bad Request">
+    Incorrect AWS credentials or region.
+    
+    **Solution**:
+    1. Verify `.env` variables are set correctly
+    2. Check AWS_REGION matches bucket region
+    3. Restart backend after changing `.env`
+  </Accordion>
+  
+  <Accordion title="Text extraction fails for PDF">
+    Error: `extraction_status = 'failed'`
+    
+    **Solution**:
+    1. Check `extraction_error` field in database
+    2. Ensure PDF is text-based (not scanned image)
+    3. Try uploading a different PDF
+    4. Check backend logs for `pdf-parse` errors
+  </Accordion>
+  
+  <Accordion title="Agents don't use document context">
+    Generated concepts don't reference uploaded documents.
+    
+    **Solution**:
+    1. Verify documents are uploaded before running agents
+    2. Check `extraction_status = 'completed'`
+    3. Ensure documents contain relevant text
+    4. Review agent SSE stream for `extract_all_concept_contexts` tool calls
+  </Accordion>
+  
+  <Accordion title="AWS_S3_BUCKET not found error">
+    Error: `The specified bucket does not exist`
+    
+    **Solution**:
+    1. Verify bucket name in `.env` matches AWS console
+    2. Check bucket region matches `AWS_REGION`
+    3. Ensure bucket wasn't deleted
+    4. List buckets:
+       ```bash
+       aws s3 ls
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Never commit credentials">
+    Add `.env` to `.gitignore`:
+    
+    ```bash .gitignore
+    .env
+    .env.local
+    .env.*.local
+    ```
+  </Accordion>
+  
+  <Accordion title="Use IAM roles in production">
+    For EC2 or ECS deployments, use IAM roles instead of access keys:
+    
+    1. Create an IAM role with S3 permissions
+    2. Attach role to EC2 instance or ECS task
+    3. Remove `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from `.env`
+    
+    AWS SDK automatically uses instance role credentials.
+  </Accordion>
+  
+  <Accordion title="Enable bucket versioning">
+    Protect against accidental deletion:
+    
+    ```bash
+    aws s3api put-bucket-versioning \
+      --bucket sprout-documents-prod \
+      --versioning-configuration Status=Enabled
+    ```
+  </Accordion>
+  
+  <Accordion title="Encrypt at rest">
+    Enable server-side encryption (SSE-S3):
+    
+    ```bash
+    aws s3api put-bucket-encryption \
+      --bucket sprout-documents-prod \
+      --server-side-encryption-configuration '{
+        "Rules": [{
+          "ApplyServerSideEncryptionByDefault": {
+            "SSEAlgorithm": "AES256"
+          }
+        }]
+      }'
+    ```
+  </Accordion>
+  
+  <Accordion title="Set lifecycle policies">
+    Automatically delete old documents:
+    
+    ```json
+    {
+      "Rules": [
+        {
+          "Id": "DeleteOldDocuments",
+          "Status": "Enabled",
+          "Expiration": {
+            "Days": 90
+          },
+          "Filter": {
+            "Prefix": "documents/"
+          }
+        }
+      ]
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Cost Optimization
+
+### S3 Storage Costs
+
+**Pricing** (us-east-1, as of 2024):
+- First 50 TB: $0.023 per GB/month
+- PUT requests: $0.005 per 1,000 requests
+- GET requests: $0.0004 per 1,000 requests
+
+**Example**: Storing 1000 PDFs (5 MB each):
+- Storage: 5 GB × $0.023 = $0.12/month
+- Uploads: 1000 × $0.005/1000 = $0.005 one-time
+
+<Info>
+  S3 costs are minimal for typical Sprout usage (hundreds to thousands of documents).
+</Info>
+
+### Reduce Costs
+
+1. **Use S3 Intelligent-Tiering**: Automatically moves objects to cheaper tiers
+2. **Set lifecycle policies**: Delete old/unused documents
+3. **Compress PDFs**: Reduce storage size before upload
+4. **Use S3 Standard-IA**: For infrequently accessed documents ($0.0125/GB)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running Locally" icon="play" href="/development/running-locally">
+    Start all services in development mode
+  </Card>
+  
+  <Card title="Database Migrations" icon="database" href="/development/database-migrations">
+    Manage database schema changes
+  </Card>
+</CardGroup>

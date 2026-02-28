@@ -1,0 +1,320 @@
+---
+title: Configuration
+description: Environment variables and configuration for Sprout services
+---
+
+## Backend Configuration
+
+The backend uses environment variables for API keys, database, and AWS configuration.
+
+### Create Backend .env File
+
+Create a `.env` file in the `sprout-backend/` directory:
+
+```bash
+cd sprout-backend
+touch .env
+```
+
+### Required Environment Variables
+
+<CodeGroup>
+```bash .env
+# Anthropic API Key (Required)
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# AWS Configuration (Required for document uploads)
+AWS_ACCESS_KEY_ID=your_aws_access_key
+AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+AWS_REGION=us-east-1
+AWS_S3_BUCKET=your-bucket-name
+
+# Database Configuration (Optional)
+DB_PATH=./sprout.db
+
+# Server Configuration (Optional)
+PORT=8000
+```
+</CodeGroup>
+
+### Configuration Details
+
+<Tabs>
+  <Tab title="Anthropic API">
+    **ANTHROPIC_API_KEY** (Required)
+    
+    The backend uses Claude for seven autonomous agents:
+    - Topic Agent
+    - Subconcept Bootstrap Agent
+    - Concept Refinement Agent
+    - Tutor Chat Agent
+    - Grade Answers Agent
+    - Generate Diagnostic Agent
+    - Review Learning Path Agent
+    
+    Get your API key from the [Anthropic Console](https://console.anthropic.com/).
+    
+    <Warning>
+      Without this key, agent-powered features (topic generation, diagnostics, tutoring) will not work.
+    </Warning>
+  </Tab>
+  
+  <Tab title="AWS S3">
+    **AWS Configuration** (Required for uploads)
+    
+    ```bash
+    AWS_ACCESS_KEY_ID=AKIA...
+    AWS_SECRET_ACCESS_KEY=wJalr...
+    AWS_REGION=us-east-1
+    AWS_S3_BUCKET=sprout-documents
+    ```
+    
+    S3 is used to store uploaded documents (PDFs, text files) that provide context for topic generation.
+    
+    <Info>
+      If you don't configure AWS, document upload features will fail, but core learning features will still work.
+    </Info>
+  </Tab>
+  
+  <Tab title="Database">
+    **DB_PATH** (Optional)
+    
+    Default: `./sprout.db`
+    
+    Path to the SQLite database file. The file will be created automatically when you run migrations.
+    
+    ```bash
+    DB_PATH=./sprout.db           # Default
+    DB_PATH=/data/sprout.db       # Custom path
+    ```
+  </Tab>
+  
+  <Tab title="Server">
+    **PORT** (Optional)
+    
+    Default: `8000`
+    
+    Port for the Express backend API.
+    
+    ```bash
+    PORT=8000    # Default
+    PORT=3001    # Custom port
+    ```
+    
+    <Note>
+      If you change the port, update `NEXT_PUBLIC_BACKEND_ORIGIN` in the frontend configuration.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Frontend Configuration
+
+The frontend uses environment variables to connect to the backend and configure feature flags.
+
+### Create Frontend .env.local File
+
+Create a `.env.local` file in the `sprout-frontend/` directory:
+
+```bash
+cd sprout-frontend
+touch .env.local
+```
+
+### Required Environment Variables
+
+<CodeGroup>
+```bash .env.local
+# Backend API URL (Required)
+NEXT_PUBLIC_BACKEND_ORIGIN=http://localhost:8000
+
+# Backend Proxy Prefix (Required)
+NEXT_PUBLIC_BACKEND_PROXY_PREFIX=/backend-api
+
+# Agent Mode (Optional)
+NEXT_PUBLIC_SMALL_AGENTS=false
+```
+</CodeGroup>
+
+### Configuration Details
+
+<Tabs>
+  <Tab title="Backend Origin">
+    **NEXT_PUBLIC_BACKEND_ORIGIN** (Required)
+    
+    The URL where your Express backend is running. Used for Server-Sent Events (SSE) streaming.
+    
+    ```bash
+    # Local development
+    NEXT_PUBLIC_BACKEND_ORIGIN=http://localhost:8000
+    
+    # Production
+    NEXT_PUBLIC_BACKEND_ORIGIN=https://api.sprout.example.com
+    ```
+    
+    <Info>
+      The frontend bypasses the Next.js proxy for SSE connections and connects directly to this origin.
+    </Info>
+  </Tab>
+  
+  <Tab title="Proxy Prefix">
+    **NEXT_PUBLIC_BACKEND_PROXY_PREFIX** (Required)
+    
+    Default: `/backend-api`
+    
+    The URL prefix for proxied backend requests. This matches the rewrite rule in `next.config.ts`.
+    
+    ```typescript next.config.ts
+    async rewrites() {
+      return [
+        {
+          source: "/backend-api/:path*",
+          destination: `${backendOrigin}/:path*`,
+        },
+      ];
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Agent Mode">
+    **NEXT_PUBLIC_SMALL_AGENTS** (Optional)
+    
+    Default: `false`
+    
+    Enable "small" mode for cheaper/faster testing. Reduces the number of concepts and subconcepts generated.
+    
+    ```bash
+    NEXT_PUBLIC_SMALL_AGENTS=false  # Normal mode: 6-10 concepts, 8-12 subconcepts
+    NEXT_PUBLIC_SMALL_AGENTS=true   # Small mode: 1-2 concepts, 2-3 subconcepts
+    ```
+    
+    <Warning>
+      Small mode is useful for development but produces less comprehensive learning pathways.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Hand Tracking Configuration
+
+The Python hand tracking service runs on a fixed port and connects via WebSocket.
+
+### Default Configuration
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| **Port** | `8765` | Avoids conflict with Node.js backend (8000) |
+| **Protocol** | WebSocket | `ws://localhost:8765` |
+| **Camera Index** | `0` | Default webcam |
+| **Frame Rate** | 60 fps | Capped to prevent queue buildup |
+| **Model Complexity** | `0` | Lightest/fastest MediaPipe model |
+
+### Customizing Hand Tracking
+
+Edit `backend.py` to customize settings:
+
+<CodeGroup>
+```python backend.py
+# Change camera index for multiple cameras
+cap = cv2.VideoCapture(1)  # Use camera 1 instead of 0
+
+# Adjust hand detection parameters
+hands = mp_hands.Hands(
+    max_num_hands=2,
+    model_complexity=0,              # 0=fast, 1=accurate
+    min_detection_confidence=0.7,    # Lower = more sensitive
+    min_tracking_confidence=0.8,     # Higher = less jitter
+)
+
+# Change WebSocket port
+async def main():
+    async with websockets.serve(handler, "localhost", 8765):
+        # Change 8765 to your preferred port
+```
+</CodeGroup>
+
+## Configuration Validation
+
+Verify your configuration is correct:
+
+<Steps>
+  <Step title="Check Backend Environment">
+    ```bash
+    cd sprout-backend
+    cat .env
+    ```
+    
+    Ensure `ANTHROPIC_API_KEY` is set.
+  </Step>
+  
+  <Step title="Check Frontend Environment">
+    ```bash
+    cd sprout-frontend
+    cat .env.local
+    ```
+    
+    Ensure `NEXT_PUBLIC_BACKEND_ORIGIN` matches your backend URL.
+  </Step>
+  
+  <Step title="Test Backend Health">
+    Start the backend and check the health endpoint:
+    
+    ```bash
+    cd sprout-backend
+    npm run dev
+    ```
+    
+    Visit `http://localhost:8000/api/health` - you should see:
+    ```json
+    {"status":"ok","timestamp":"2024-..."}
+    ```
+  </Step>
+</Steps>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Missing ANTHROPIC_API_KEY error">
+    The backend will fail to start or agent routes will return 500 errors.
+    
+    **Solution**: Add your Anthropic API key to `.env`:
+    ```bash
+    ANTHROPIC_API_KEY=sk-ant-...
+    ```
+  </Accordion>
+  
+  <Accordion title="Document uploads fail with S3 error">
+    AWS credentials are missing or incorrect.
+    
+    **Solution**: Verify your AWS credentials and bucket name:
+    ```bash
+    AWS_ACCESS_KEY_ID=AKIA...
+    AWS_SECRET_ACCESS_KEY=wJalr...
+    AWS_S3_BUCKET=your-bucket-name
+    ```
+    
+    Test with AWS CLI:
+    ```bash
+    aws s3 ls s3://your-bucket-name
+    ```
+  </Accordion>
+  
+  <Accordion title="Frontend can't connect to backend">
+    CORS error or connection refused.
+    
+    **Solution**: Check that:
+    1. Backend is running on the correct port
+    2. `NEXT_PUBLIC_BACKEND_ORIGIN` matches the backend URL
+    3. Backend has CORS enabled (enabled by default in `src/index.ts`)
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running Locally" icon="play" href="/development/running-locally">
+    Start all three services in development mode
+  </Card>
+  
+  <Card title="Database Migrations" icon="database" href="/development/database-migrations">
+    Initialize the SQLite database schema
+  </Card>
+</CardGroup>

@@ -1,0 +1,441 @@
+---
+title: Running Locally
+description: How to run all three Sprout services in development mode
+---
+
+Sprout consists of three services that must run simultaneously for full functionality:
+
+1. **Backend API** (Express + TypeScript)
+2. **Hand Tracking Service** (Python + WebSocket)
+3. **Frontend** (Next.js 16)
+
+## Quick Start
+
+Start all three services in separate terminal windows:
+
+<Steps>
+  <Step title="Start Hand Tracking Service">
+    ```bash
+    cd sprout-backend
+    conda activate sprout-cv
+    python backend.py
+    ```
+    
+    Expected output:
+    ```
+    WebSocket Server started on ws://localhost:8765
+    ```
+  </Step>
+  
+  <Step title="Start Backend API">
+    ```bash
+    cd sprout-backend
+    npm run dev
+    ```
+    
+    Expected output:
+    ```
+    Default user seeded.
+    Sprout backend running on http://localhost:8000
+    ```
+  </Step>
+  
+  <Step title="Start Frontend">
+    ```bash
+    cd sprout-frontend
+    npm run dev
+    ```
+    
+    Expected output:
+    ```
+    ▲ Next.js 16.1.6
+    - Local:        http://localhost:3000
+    ```
+  </Step>
+  
+  <Step title="Open in Browser">
+    Navigate to `http://localhost:3000` and start using Sprout.
+  </Step>
+</Steps>
+
+<Info>
+  All three services must be running for full functionality. Hand tracking can be skipped if you don't need that feature.
+</Info>
+
+## Service Details
+
+### 1. Hand Tracking Service
+
+The Python WebSocket server captures webcam input and streams hand landmark data to the frontend.
+
+<CodeGroup>
+```bash Start Service
+cd sprout-backend
+conda activate sprout-cv
+python backend.py
+```
+
+```bash Verify Running
+curl -i -N -H "Connection: Upgrade" \
+     -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Version: 13" \
+     -H "Sec-WebSocket-Key: test" \
+     http://localhost:8765
+# Should return 101 Switching Protocols
+```
+</CodeGroup>
+
+**Configuration**:
+- Port: `8765`
+- Protocol: WebSocket (`ws://localhost:8765`)
+- Frame Rate: 60 fps (capped)
+- Camera: Index 0 (default webcam)
+
+<Note>
+  Make sure your webcam is not in use by another application before starting.
+</Note>
+
+### 2. Backend API
+
+The Express + TypeScript backend provides REST endpoints and Server-Sent Events for agent streaming.
+
+<CodeGroup>
+```bash Development Mode
+cd sprout-backend
+npm run dev
+# Uses tsx watch for hot reloading
+```
+
+```bash Production Build
+npm run build
+npm start
+# Compiles TypeScript and runs compiled JavaScript
+```
+</CodeGroup>
+
+**Endpoints**:
+- Health Check: `http://localhost:8000/api/health`
+- API Base: `http://localhost:8000/api`
+- SSE Streaming: Various agent endpoints
+
+**Auto-Seeding**:
+On startup, the backend automatically creates a default user:
+```typescript
+DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
+email = "default@sprout.local"
+```
+
+<Warning>
+  Sprout is a single-user application with no authentication. The default user is auto-created on first startup.
+</Warning>
+
+### 3. Frontend
+
+The Next.js 16 frontend renders the 3D knowledge graph and provides the learning interface.
+
+<CodeGroup>
+```bash Development Mode
+cd sprout-frontend
+npm run dev
+# Starts Next.js dev server with hot reloading
+```
+
+```bash Production Build
+npm run build
+npm start
+# Optimized production build
+```
+
+```bash Linting and Formatting
+npm run lint     # Run Biome linter
+npm run format   # Format code with Biome
+```
+</CodeGroup>
+
+**Features**:
+- 3D graph visualization (Three.js + React Flow)
+- Real-time agent activity streaming
+- Hand tracking integration
+- Interactive tutoring sessions
+
+**Proxy Configuration**:
+The frontend proxies `/backend-api/*` requests to the backend:
+```typescript next.config.ts
+async rewrites() {
+  return [
+    {
+      source: "/backend-api/:path*",
+      destination: "http://localhost:8000/:path*",
+    },
+  ];
+}
+```
+
+## Development Workflow
+
+### Recommended Terminal Setup
+
+Use a terminal multiplexer like `tmux` or split terminals:
+
+<Tabs>
+  <Tab title="tmux">
+    ```bash
+    # Create a new tmux session
+    tmux new -s sprout
+    
+    # Split into three panes
+    # Ctrl+b then %  (vertical split)
+    # Ctrl+b then "  (horizontal split)
+    
+    # Pane 1: Hand tracking
+    cd sprout-backend
+    conda activate sprout-cv
+    python backend.py
+    
+    # Pane 2: Backend
+    cd sprout-backend
+    npm run dev
+    
+    # Pane 3: Frontend
+    cd sprout-frontend
+    npm run dev
+    ```
+  </Tab>
+  
+  <Tab title="Separate Windows">
+    Open three terminal windows:
+    
+    **Terminal 1: Hand Tracking**
+    ```bash
+    cd sprout-backend && conda activate sprout-cv && python backend.py
+    ```
+    
+    **Terminal 2: Backend**
+    ```bash
+    cd sprout-backend && npm run dev
+    ```
+    
+    **Terminal 3: Frontend**
+    ```bash
+    cd sprout-frontend && npm run dev
+    ```
+  </Tab>
+</Tabs>
+
+### Hot Reloading
+
+<Tabs>
+  <Tab title="Backend">
+    Backend uses `tsx watch` for automatic reloading:
+    
+    ```json package.json
+    "dev": "tsx watch src/index.ts"
+    ```
+    
+    Changes to `src/**/*.ts` files will trigger automatic restart.
+  </Tab>
+  
+  <Tab title="Frontend">
+    Frontend uses Next.js Fast Refresh:
+    
+    - React component changes reload instantly
+    - Page changes reload the affected page
+    - Config changes require manual restart
+  </Tab>
+  
+  <Tab title="Hand Tracking">
+    Python service does not support hot reloading. Restart manually:
+    
+    ```bash
+    # Stop: Ctrl+C
+    # Start again:
+    python backend.py
+    ```
+  </Tab>
+</Tabs>
+
+## Using Sprout
+
+Once all services are running:
+
+<Steps>
+  <Step title="Create a Topic">
+    1. Open `http://localhost:3000`
+    2. Click "Add a branch" or create a new topic
+    3. Enter a topic title (e.g., "Linear Algebra")
+    4. Optionally upload documents for context
+  </Step>
+  
+  <Step title="Generate Learning Path">
+    Click "Run agents" to start the two-phase generation:
+    
+    **Phase 1: Topic Agent**
+    - Generates 6-10 concept nodes
+    - Extracts document context
+    - Creates prerequisite edges
+    
+    **Phase 2: Subconcept Bootstrap**
+    - Runs in parallel for each concept (max 3 concurrent)
+    - Creates 8-12 subconcepts per concept
+    - Generates diagnostic questions
+    
+    <Info>
+      Set `NEXT_PUBLIC_SMALL_AGENTS=true` to generate 1-2 concepts and 2-3 subconcepts for faster testing.
+    </Info>
+  </Step>
+  
+  <Step title="Answer Diagnostic Questions">
+    Click on a concept node to answer diagnostic questions. The system will personalize the subconcept graph based on your performance.
+  </Step>
+  
+  <Step title="Enable Hand Tracking">
+    Toggle "Hand tracking" in the bottom-right corner to control the camera and graph with hand gestures.
+    
+    **Gestures**:
+    - Normal hand: Orbit camera with index finger
+    - Open palm (3s hold): Enter grab mode
+    - Grab + palm over node: Drag node in 3D space
+  </Step>
+  
+  <Step title="Learn Subconcepts">
+    Click on a subconcept to start an interactive tutoring session with chunk-based teaching and exercises.
+  </Step>
+</Steps>
+
+## Monitoring Activity
+
+### Backend Logs
+
+The backend logs include:
+- Agent activity (tool calls, reasoning)
+- Database operations
+- API requests
+- Errors and warnings
+
+```bash
+Default user seeded.
+Sprout backend running on http://localhost:8000
+# Agent logs appear here during generation
+```
+
+### Frontend SSE Streams
+
+Open browser DevTools to see Server-Sent Events:
+
+1. Open DevTools (F12)
+2. Go to Network tab
+3. Filter by "EventStream"
+4. Click on an active connection to see events:
+   - `agent_start`
+   - `agent_reasoning`
+   - `tool_call`
+   - `tool_result`
+   - `node_created`
+   - `edge_created`
+   - `agent_done`
+
+### Hand Tracking Debug
+
+The Python service prints frame-by-frame data:
+```
+WebSocket Server started on ws://localhost:8765
+Client connected
+Sending frame data: {"hands": [{"handedness": "Right", "x": 0.5, ...}]}
+```
+
+## Stopping Services
+
+<Tabs>
+  <Tab title="Graceful Shutdown">
+    Press `Ctrl+C` in each terminal window:
+    
+    1. Stop hand tracking: `Ctrl+C`
+    2. Stop backend: `Ctrl+C`
+    3. Stop frontend: `Ctrl+C`
+  </Tab>
+  
+  <Tab title="Kill All">
+    Find and kill processes by port:
+    
+    ```bash
+    # Kill backend (port 8000)
+    lsof -ti:8000 | xargs kill -9
+    
+    # Kill frontend (port 3000)
+    lsof -ti:3000 | xargs kill -9
+    
+    # Kill hand tracking (port 8765)
+    lsof -ti:8765 | xargs kill -9
+    ```
+  </Tab>
+</Tabs>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    Error: `EADDRINUSE: address already in use`
+    
+    **Solution**: Kill the process using the port:
+    ```bash
+    lsof -ti:8000 | xargs kill -9  # Backend
+    lsof -ti:3000 | xargs kill -9  # Frontend
+    lsof -ti:8765 | xargs kill -9  # Hand tracking
+    ```
+  </Accordion>
+  
+  <Accordion title="Hand tracking not moving">
+    The 3D pointer doesn't respond to hand movements.
+    
+    **Solution**:
+    1. Ensure `python backend.py` is running
+    2. Check browser console for WebSocket connection errors
+    3. Grant camera permission when prompted
+    4. Verify camera is not in use by another app
+  </Accordion>
+  
+  <Accordion title="SSE streaming stops">
+    Agent activity stops streaming in the UI.
+    
+    **Solution**:
+    1. Verify `NEXT_PUBLIC_BACKEND_ORIGIN` matches backend URL
+    2. Check backend logs for errors
+    3. Frontend bypasses proxy for SSE - ensure direct connection works
+    4. Check CORS is enabled (default in `src/index.ts`)
+  </Accordion>
+  
+  <Accordion title="Database locked error">
+    Error: `SQLITE_BUSY: database is locked`
+    
+    **Solution**:
+    1. Ensure only one backend instance is running
+    2. Close any DB browser tools accessing `sprout.db`
+    3. Restart the backend
+  </Accordion>
+  
+  <Accordion title="Document upload fails">
+    S3 upload returns 403 or 500 error.
+    
+    **Solution**:
+    1. Verify AWS credentials in `.env`
+    2. Check S3 bucket exists and is accessible
+    3. Verify IAM permissions allow `s3:PutObject`
+    
+    Test with AWS CLI:
+    ```bash
+    aws s3 cp test.txt s3://your-bucket-name/test.txt
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Migrations" icon="database" href="/development/database-migrations">
+    Learn how to manage database schema changes
+  </Card>
+  
+  <Card title="Hand Tracking Setup" icon="hand" href="/development/hand-tracking-setup">
+    Deep dive into hand tracking configuration
+  </Card>
+</CardGroup>

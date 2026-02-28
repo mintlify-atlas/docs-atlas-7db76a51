@@ -1,80 +1,437 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get Sprout running locally in under 10 minutes
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+Before you begin, ensure you have the following installed:
 
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+- **Node.js 20+** and npm
+- **Anaconda or Miniconda** (or Python 3.11+) for hand tracking
+- **Anthropic API key** ([get one here](https://console.anthropic.com/))
+- **AWS credentials and S3 bucket** (optional, for document uploads)
+- **Webcam** (optional, for hand tracking navigation)
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  You can skip AWS setup if you don't need document upload functionality. Hand tracking is also optional—you can navigate the graph with mouse/keyboard.
 </Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/izhukau/sprout.git
+    cd sprout
+    ```
+  </Step>
+
+  <Step title="Set up the backend API">
+    Navigate to the backend directory and install dependencies:
+
+    ```bash
+    cd sprout-backend
+    npm install
+    ```
+
+    Create a `.env` file in `sprout-backend/` with your configuration:
+
+    ```bash
+    # Required
+    ANTHROPIC_API_KEY=your_anthropic_api_key
+
+    # Optional - for document uploads
+    AWS_ACCESS_KEY_ID=your_aws_key
+    AWS_SECRET_ACCESS_KEY=your_aws_secret
+    AWS_REGION=us-east-1
+    AWS_S3_BUCKET=your-bucket-name
+
+    # Optional - customize defaults
+    DB_PATH=./sprout.db  # SQLite database location
+    PORT=8000            # Backend server port
+    ```
+
+    <Info>
+      The backend uses SQLite for local storage. The database file will be created automatically when you run migrations.
+    </Info>
+
+    Apply the database schema:
+
+    ```bash
+    npm run db:migrate
+    ```
+
+    You should see output confirming the creation of `sprout.db`.
+  </Step>
+
+  <Step title="Set up hand tracking (optional)">
+    The hand tracking service uses Python with OpenCV and MediaPipe to detect hand landmarks via your webcam.
+
+    Stay in the `sprout-backend/` directory and verify conda is installed:
+
+    ```bash
+    conda --version
+    ```
+
+    <Warning>
+      If conda is not found, [install Miniconda](https://docs.conda.io/en/latest/miniconda.html) before continuing.
+    </Warning>
+
+    Create and activate the conda environment:
+
+    ```bash
+    conda create -n sprout-cv python=3.11 -y
+    conda activate sprout-cv
+    ```
+
+    Install the computer vision dependencies:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    This installs:
+    - `mediapipe==0.10.14` - Hand landmark detection
+    - `opencv-python==4.13.0.92` - Video capture and processing
+    - `websockets==12.0` - WebSocket server for real-time streaming
+    - `numpy==2.4.2` - Numerical operations
+
+    <Note>
+      Keep this terminal open with the `sprout-cv` environment activated—you'll need it to run the hand tracking server.
+    </Note>
+  </Step>
+
+  <Step title="Set up the frontend">
+    Open a new terminal and navigate to the frontend directory:
+
+    ```bash
+    cd sprout-frontend
+    npm install
+    ```
+
+    Create a `.env.local` file in `sprout-frontend/`:
+
+    ```bash
+    # Backend API configuration
+    NEXT_PUBLIC_BACKEND_ORIGIN=http://localhost:8000
+    NEXT_PUBLIC_BACKEND_PROXY_PREFIX=/backend-api
+
+    # Optional - use cheaper Claude models for testing
+    NEXT_PUBLIC_SMALL_AGENTS=false
+    ```
+
+    <Info>
+      The `NEXT_PUBLIC_BACKEND_PROXY_PREFIX` matches the Next.js rewrite configuration. SSE endpoints bypass the proxy and connect directly to `NEXT_PUBLIC_BACKEND_ORIGIN`.
+    </Info>
+  </Step>
+</Steps>
+
+## Running Sprout
+
+You'll need three separate terminal sessions to run all services:
+
+<CodeGroup>
+```bash Terminal 1: Backend API
+cd sprout-backend
+npm run dev
+
+# Expected output:
+# Default user seeded.
+# Sprout backend running on http://localhost:8000
+```
+
+```bash Terminal 2: Hand Tracking (optional)
+cd sprout-backend
+conda activate sprout-cv
+python backend.py
+
+# Expected output:
+# WebSocket Server started on ws://localhost:8765
+```
+
+```bash Terminal 3: Frontend
+cd sprout-frontend
+npm run dev
+
+# Expected output:
+# ▲ Next.js 16.1.6
+# - Local: http://localhost:3000
+```
+</CodeGroup>
+
+<Warning>
+  Start the backend **before** the frontend to ensure API connectivity. Hand tracking can be started anytime but must be running before you toggle it in the UI.
+</Warning>
+
+## Health Check
+
+Verify the backend is running:
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-02-28T12:34:56.789Z"
+}
+```
+
+## Create Your First Topic
+
+Now that all services are running, let's create your first learning pathway:
+
+<Steps>
+  <Step title="Open the app">
+    Navigate to [http://localhost:3000](http://localhost:3000) in your browser.
+  </Step>
+
+  <Step title="Create a new topic">
+    Click **"Add Topic"** or **"Create Branch"** and enter a learning goal:
+
+    - "Linear Algebra for Machine Learning"
+    - "Fauna from Darkest Peru"  
+    - "Introduction to React Hooks"
+
+    <Info>
+      Topics are called "branches" in the API, representing the root of your learning tree.
+    </Info>
+  </Step>
+
+  <Step title="Upload documents (optional)">
+    If you have PDFs, lecture notes, or course materials, upload them to provide context. Sprout will extract relevant sections for each concept.
+
+    The upload functionality requires AWS S3 configuration in your backend `.env` file.
+  </Step>
+
+  <Step title="Watch the agents work">
+    The UI streams real-time progress via Server-Sent Events as agents:
+
+    1. **Topic Agent** generates 6-10 concepts with prerequisite relationships
+    2. **Subconcept Bootstrap Agents** run in parallel (max 3 concurrent) to create 8-12 subconcepts per concept
+    3. **Generate Diagnostic Agents** create mixed-format assessment questions
+
+    You'll see SSE events in the activity panel:
+
+    ```
+    agent_start: {"agent":"topic"}
+    agent_reasoning: {"text":"Analyzing the topic scope..."}
+    tool_call: {"tool":"save_concept","input":{...}}
+    node_created: {"node":{"id":"...","title":"Vectors and Matrices"}}
+    edge_created: {"edge":{"sourceNodeId":"...","targetNodeId":"..."}}
+    agent_done: {"agent":"topic"}
+    ```
+
+    <Note>
+      Set `NEXT_PUBLIC_SMALL_AGENTS=true` in frontend `.env.local` to use cheaper testing mode: 1-2 concepts with 2-3 subconcepts each.
+    </Note>
+  </Step>
+
+  <Step title="Explore the 3D graph">
+    Once generation completes, you'll see an interactive 3D knowledge graph. Navigate using:
+
+    - **Mouse drag** - Rotate the graph
+    - **Scroll** - Zoom in/out
+    - **Click nodes** - Select concepts to view details
+    - **Hand tracking** - Toggle in bottom-right corner (requires Python backend running)
+  </Step>
+
+  <Step title="Enable hand tracking navigation">
+    If you started the Python hand tracking server (`python backend.py`), click the **"Hand Tracking"** toggle in the bottom-right corner.
+
+    Grant camera permissions when prompted, then use natural hand movements:
+
+    - **Index finger** - Move the cursor
+    - **Pinch (thumb + index)** - Zoom the graph  
+    - **Open palm (hold 3s)** - Enter grab mode to drag nodes
+
+    The hand tracking uses MediaPipe for landmark detection with exponential moving average smoothing:
+
+    ```python
+    # backend.py - Hand tracking configuration
+    SEND_INTERVAL = 1 / 60      # 60fps stream
+    SMOOTH_ALPHA = 0.35          # EMA smoothing weight
+    PALM_HOLD_SECONDS = 3.0      # Hold duration to grab
+    ```
+  </Step>
+
+  <Step title="Take diagnostic assessments">
+    Click on a concept node to view diagnostic questions. These assess your current understanding with:
+
+    - **Multiple choice questions** - Quick comprehension checks
+    - **Open-ended questions** - Deeper reasoning evaluation
+
+    Submit your answers to trigger the **Concept Refinement Agent**, which will:
+
+    1. Grade your responses via the Grade Answers Agent
+    2. Analyze your performance against historical data
+    3. Restructure the subconcept graph to add remediation or remove mastered content
+    4. Validate the graph for integrity (no orphans, no broken edges)
+  </Step>
+
+  <Step title="Learn with the tutor">
+    Dive into a subconcept to start an interactive tutoring session. The Tutor Agent will:
+
+    - Check prerequisite mastery before starting
+    - Break the concept into 3-6 digestible chunks
+    - Present worked examples and create practice exercises
+    - Track your mastery score and persist progress
+
+    Example tutor interaction:
+
+    ```typescript
+    POST /api/chat/sessions/:sessionId/tutor
+    {
+      "message": "What's the difference between a vector and a matrix?"
+    }
+    ```
+
+    The tutor follows one rule: guide you to the answer, don't provide it directly.
+  </Step>
+</Steps>
+
+## API Endpoints
+
+Here are the key endpoints you'll interact with:
+
+| Endpoint | Method | Purpose |
+|----------|--------|--------|
+| `/api/health` | GET | Health check |
+| `/api/branches` | GET/POST | List or create topics |
+| `/api/branches/:id` | GET/PATCH/DELETE | Manage a topic |
+| `/api/agents/topics/:topicNodeId/run` | POST | Generate concepts (SSE) |
+| `/api/agents/concepts/:conceptNodeId/run` | POST | Run diagnostics or refinement (SSE) |
+| `/api/chat/sessions/:sessionId/tutor` | POST | Interactive tutoring |
+| `/api/nodes/:nodeId/documents` | POST | Upload documents |
+
+<Info>
+  All agent endpoints stream Server-Sent Events (SSE) for real-time progress. Check the [API Reference](/api-reference/introduction) for detailed request/response schemas.
+</Info>
+
+## Troubleshooting
+
+### Hand tracking not working
+
+- Ensure `python backend.py` is running in the `sprout-cv` conda environment
+- Verify WebSocket connection at `ws://localhost:8765`
+- Grant camera permissions in your browser
+- Check the browser console for connection errors
+
+### Document uploads failing
+
+```bash
+# Verify AWS credentials are set in sprout-backend/.env
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+AWS_REGION=us-east-1
+AWS_S3_BUCKET=your-bucket
+```
+
+Without AWS config, document upload requests will fail. This is optional for basic functionality.
+
+### SSE stream stops or doesn't connect
+
+- The frontend bypasses the Next.js proxy for SSE endpoints
+- Verify `NEXT_PUBLIC_BACKEND_ORIGIN` matches your backend URL (default: `http://localhost:8000`)
+- Check that CORS is enabled in the backend (it is by default in `src/index.ts`)
+- Ensure the backend is running before the frontend connects
+
+### Database errors
+
+```bash
+# Reset the database (deletes all data)
+cd sprout-backend
+rm sprout.db
+npm run db:migrate
+```
+
+### Port conflicts
+
+If ports 3000, 8000, or 8765 are already in use:
+
+```bash
+# Backend: Change PORT in sprout-backend/.env
+PORT=8001
+
+# Frontend: Update NEXT_PUBLIC_BACKEND_ORIGIN in sprout-frontend/.env.local
+NEXT_PUBLIC_BACKEND_ORIGIN=http://localhost:8001
+
+# Hand tracking: Edit backend.py line 170
+websockets.serve(track_hands, "localhost", 8766)
+```
+
+## Next Steps
+
+Now that Sprout is running, explore:
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="diagram-project" href="/architecture/overview">
+    Learn how the seven-agent system works
+  </Card>
+  <Card title="Hand Tracking Deep Dive" icon="hand" href="/features/hand-tracking">
+    Configure and customize hand gesture controls
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Integrate Sprout into your own applications
+  </Card>
+  <Card title="Agent Workflows" icon="robot" href="/agents/introduction">
+    Understand the Observe-Reason-Act-Verify loops
+  </Card>
+</CardGroup>
+
+## Development Scripts
+
+<CodeGroup>
+```bash Backend
+cd sprout-backend
+
+# Development server with auto-reload
+npm run dev
+
+# Database operations
+npm run db:migrate   # Apply migrations
+npm run db:generate  # Generate migration files
+npm run db:push      # Push schema changes
+
+# Production build
+npm run build
+npm start
+```
+
+```bash Frontend  
+cd sprout-frontend
+
+# Development server
+npm run dev
+
+# Linting and formatting (Biome)
+npm run lint
+npm run format
+
+# Production build
+npm run build
+npm start
+```
+
+```bash Hand Tracking
+cd sprout-backend
+conda activate sprout-cv
+
+# Start WebSocket server
+python backend.py
+
+# If you need to rebuild the environment
+conda env remove -n sprout-cv
+conda create -n sprout-cv python=3.11 -y
+conda activate sprout-cv
+pip install -r requirements.txt
+```
+</CodeGroup>
+
+---
+
+You're all set! Open [http://localhost:3000](http://localhost:3000) and start building your personalized knowledge graph.

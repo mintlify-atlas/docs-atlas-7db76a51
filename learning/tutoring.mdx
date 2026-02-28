@@ -1,0 +1,315 @@
+---
+title: Interactive Tutoring
+description: Learn with Sprout's AI tutor through chunk-by-chunk teaching and practice
+---
+
+Sprout's AI tutor teaches you interactively, breaking each subconcept into digestible chunks with explanations, examples, and checkpoint questions. The tutor adapts to your understanding in real-time.
+
+## How Tutoring Works
+
+Every subconcept is taught through a conversational chat session. The Tutor Agent breaks the material into 3-6 chunks and guides you through each one with:
+
+- Clear explanations
+- Worked examples
+- Checkpoint questions to verify understanding
+- Diagrams and visualizations when helpful
+- Hints and clarifications when you're stuck
+
+### Starting a Tutoring Session
+
+<Steps>
+  <Step title="Create a chat session">
+    ```bash
+    POST /api/chat/sessions
+    {
+      "userId": "your-user-id",
+      "nodeId": "subconcept-node-id"
+    }
+    ```
+
+    Each session is linked to a specific subconcept node and tracked in the database.
+  </Step>
+
+  <Step title="Send your first message">
+    ```bash
+    POST /api/chat/sessions/:sessionId/tutor
+    {
+      "userId": "your-user-id",
+      "content": ""  // Empty to start the session
+    }
+    ```
+
+    The tutor will:
+    - Check your diagnostic results for the parent concept
+    - Check if prerequisite subconcepts are mastered
+    - Begin teaching the first chunk
+  </Step>
+
+  <Step title="Continue the conversation">
+    The tutor teaches chunk-by-chunk:
+    1. **Explain** the concept
+    2. **Ask a checkpoint question**
+    3. **Evaluate your answer**
+    4. Move to the next chunk or re-explain if needed
+
+    When you answer a checkpoint question, prefix your message with `[ANSWER]`:
+
+    ```bash
+    POST /api/chat/sessions/:sessionId/tutor
+    {
+      "userId": "your-user-id",
+      "content": "[ANSWER] Row operations are reversible transformations..."
+    }
+    ```
+  </Step>
+
+  <Step title="Session completes">
+    When all chunks are covered and you've demonstrated understanding, the tutor marks the session complete with `[COMPLETE]` and the chat session ends automatically.
+  </Step>
+</Steps>
+
+## Checkpoint Question Types
+
+The tutor can ask three types of checkpoint questions:
+
+### Text Questions
+
+Standard written responses:
+
+```
+Checkpoint Question:
+What is the key difference between row operations and column operations?
+
+Question Type: text
+```
+
+Answer with written explanation:
+
+```bash
+{
+  "content": "[ANSWER] Row operations work on rows while column operations..."
+}
+```
+
+### Code Questions
+
+For programming topics, the tutor asks you to write runnable code:
+
+```
+Checkpoint Question:
+Write code that performs Gaussian elimination on a 3×3 matrix.
+
+Question Type: code
+```
+
+Answer with code and explanation:
+
+```bash
+{
+  "content": "[ANSWER] Here's my solution:\n\n```python\ndef gaussian_elimination(matrix):\n  # Step 1: Forward elimination\n  ...\n```\n\nThis works by..."
+}
+```
+
+### Drawing Questions
+
+Visual problems where you sketch your solution:
+
+```
+Checkpoint Question:
+Draw the row-reduction process for the given system step-by-step.
+
+Question Type: draw
+```
+
+Answer with a base64-encoded image:
+
+```bash
+{
+  "content": "[ANSWER] Here's my step-by-step drawing",
+  "drawingImageDataUrl": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+}
+```
+
+Supported formats: `image/png`, `image/jpeg` (max 7 MB)
+
+<Info>
+The tutor automatically detects the question type from its own output. If it sees "Question Type: code", it expects code. If "Question Type: draw", it expects a drawing attachment.
+</Info>
+
+## Requesting Clarification
+
+If you don't understand something, ask for help by prefixing with `[CLARIFICATION]`:
+
+```bash
+POST /api/chat/sessions/:sessionId/tutor
+{
+  "userId": "your-user-id",
+  "content": "[CLARIFICATION] Can you explain what you mean by 'pivot position'?"
+}
+```
+
+The tutor will:
+- Strip out the checkpoint question temporarily
+- Provide a hint or re-explanation
+- Re-ask the same question afterward (tracked as `chunkTransition: "same"`)
+
+<Note>
+Clarification mode ensures the tutor doesn't move to the next chunk until you understand the current one. It's designed to prevent you from falling behind.
+</Note>
+
+## Tutor Tools
+
+The Tutor Agent uses specialized tools to enhance teaching:
+
+### `check_student_progress`
+Loads diagnostic results for the parent concept to understand your knowledge gaps before teaching.
+
+### `check_prerequisite_mastery`
+Checks if prerequisite subconcepts are mastered (mastery score ≥ 0.7). If not, the tutor may suggest reviewing them first.
+
+### `generate_example`
+Creates a worked example with step-by-step reasoning:
+
+```json
+{
+  "topic": "matrix multiplication",
+  "difficulty": "moderate"  // "simple" | "moderate" | "challenging"
+}
+```
+
+The tutor presents a concrete scenario with real numbers and shows the complete process.
+
+### `create_exercise`
+Creates a practice problem for you to solve:
+
+```json
+{
+  "topic": "row reduction",
+  "difficulty": "medium"  // "easy" | "medium" | "hard"
+}
+```
+
+The tutor presents ONLY the problem and keeps the solution hidden so it can check your work.
+
+### `visualize_concept`
+Creates an ASCII or text diagram:
+
+```json
+{
+  "what": "matrix multiplication process",
+  "style": "diagram"  // "diagram" | "table" | "flowchart" | "comparison"
+}
+```
+
+Visualizations help with:
+- Showing relationships between concepts
+- Illustrating step-by-step processes
+- Comparing different approaches
+- Representing data structures
+
+### `record_exercise_result`
+Persists your exercise attempts and updates mastery scores:
+
+```json
+{
+  "exerciseId": "uuid",
+  "wasCorrect": true,
+  "scoreChange": 0.15  // Increment to mastery score
+}
+```
+
+Called after you complete checkpoint questions to track progress.
+
+## Tutor Response Format
+
+```typescript
+{
+  message: string,              // Tutor's response content
+  isComplete: boolean,          // Whether tutoring session is done
+  toolsUsed: string[],          // Tools the agent called
+  reasoning: string[]           // Claude's reasoning steps (from agent loop)
+}
+```
+
+### Chunk Transitions
+
+Internal tracking (not exposed in API) tells the system whether to:
+- `"advance"` — Move to next chunk
+- `"same"` — Re-ask the current chunk (after clarification)
+- `null` — Still teaching current chunk
+
+This determines whether to add a new card or update the existing card in `nodeContents`.
+
+## Learning Cards
+
+As you progress through chunks, the system persists each chunk as a structured card:
+
+```typescript
+{
+  id: string,
+  index: number,
+  explanation: string,          // The teaching content
+  question: string | null,      // The checkpoint question
+  questionType: "text" | "code" | "draw" | null
+}
+```
+
+Cards are stored in `nodeContents.cards` as JSON. This creates a structured record of your learning session that can be reviewed later.
+
+<Info>
+If the tutor re-asks the same question (after clarification), it updates the last card instead of creating a new one. This prevents duplicate content in your learning history.
+</Info>
+
+## Conversation History
+
+All messages are saved in `chatMessages` with:
+
+- **Role:** `user` or `assistant`
+- **Kind:** `learning` (normal teaching), `hint_request` (clarification), `hint_response` (tutor's hint), or `evaluation` (answer evaluation)
+- **Content:** Full message text
+- **Timestamp:** When the message was created
+
+You can retrieve the full conversation:
+
+```bash
+GET /api/chat/sessions/:sessionId/messages
+```
+
+## Mastery Tracking
+
+As you answer checkpoint questions correctly, your mastery score increases (tracked in `userNodeProgress`):
+
+- Starts at 0.0
+- Increases with each correct answer (via `record_exercise_result`)
+- Mastery threshold: 0.7 (subconcept is considered "mastered")
+- Used by the tutor to check prerequisites before teaching dependent subconcepts
+
+## Agent Loop Configuration
+
+The Tutor Agent uses the shared agent loop with:
+
+- **Model:** Claude 4.5 Sonnet
+- **Max iterations:** 5 (shorter than other agents to prevent overly long responses)
+- **Reasoning visibility:** All reasoning steps are captured and returned in the response
+
+<Note>
+The tutor is optimized for interactive teaching, not long planning sessions. The 5-iteration limit keeps responses focused and prevents the tutor from over-explaining.
+</Note>
+
+## Example Session Flow
+
+1. **User creates session** → Tutor checks diagnostics and prerequisites
+2. **Tutor teaches chunk 1** → Explains concept, asks checkpoint question
+3. **User answers** → Tutor evaluates, provides feedback
+4. **User asks for clarification** → Tutor provides hint, re-asks same question
+5. **User answers correctly** → Tutor records exercise result, moves to chunk 2
+6. **Repeat** for chunks 2-6
+7. **All chunks complete** → Tutor marks `[COMPLETE]`, session ends
+
+## Next Steps
+
+After completing a subconcept:
+
+1. Move to the next subconcept in the DAG (following dependency edges)
+2. Track your overall progress and mastery scores
+3. Review your learning path to see what's next

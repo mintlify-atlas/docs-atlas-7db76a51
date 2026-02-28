@@ -1,0 +1,364 @@
+---
+title: Subconcept bootstrap agent
+description: Builds diagnostic questions and subconcept DAGs for each concept
+---
+
+## Purpose
+
+The Subconcept Bootstrap Agent builds the learning structure for a single concept by creating:
+- 5-10 diagnostic questions (MCQ + open-ended)
+- 8-12 subconcept nodes arranged as a DAG
+- Dependency edges between subconcepts
+
+**Location**: `sprout-backend/src/agents/subconcept-bootstrap-agent.ts`
+
+## Process flow
+
+<Steps>
+  <Step title="Create diagnostic questions">
+    Generates 5-10 questions with mixed difficulty (1-5) and format (MCQ vs open-ended) to assess student background knowledge.
+  </Step>
+  
+  <Step title="Create subconcept nodes">
+    Breaks the concept into 8-12 smaller learning units (subconcepts) that can be taught individually.
+  </Step>
+  
+  <Step title="Wire dependency edges">
+    Creates edges between subconcepts to form a DAG, ensuring prerequisite relationships are respected.
+  </Step>
+  
+  <Step title="Verify graph structure">
+    Ensures no orphaned nodes exist and all subconcepts are reachable from entry points.
+  </Step>
+</Steps>
+
+## Agent tools
+
+The Subconcept Bootstrap Agent has access to three specialized tools:
+
+<Accordion title="save_diagnostic_question">
+  Creates a diagnostic question for the concept.
+  
+  **Input**:
+  ```json
+  {
+    "format": "mcq",
+    "prompt": "What is the time complexity of searching in a BST?",
+    "options": ["O(1)", "O(log n)", "O(n)", "O(n log n)"],
+    "correctAnswer": "O(log n)",
+    "difficulty": 2
+  }
+  ```
+  
+  For open-ended questions:
+  ```json
+  {
+    "format": "open_ended",
+    "prompt": "Explain how a binary search tree maintains sorted order.",
+    "gradingRubric": {
+      "key_points": [
+        "Left subtree contains smaller values",
+        "Right subtree contains larger values",
+        "Recursive property applies to all nodes"
+      ],
+      "min_score": 0.6
+    },
+    "difficulty": 3
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "questionId": "question-uuid-123",
+    "success": true
+  }
+  ```
+</Accordion>
+
+<Accordion title="save_subconcept">
+  Creates a subconcept node.
+  
+  **Input**:
+  ```json
+  {
+    "title": "BST Node Structure",
+    "description": "Understanding the node structure: value, left child, right child"
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "nodeId": "subconcept-uuid-456",
+    "success": true
+  }
+  ```
+</Accordion>
+
+<Accordion title="save_subconcept_edge">
+  Creates a dependency edge between subconcepts.
+  
+  **Input**:
+  ```json
+  {
+    "sourceNodeId": "subconcept-uuid-456",
+    "targetNodeId": "subconcept-uuid-789",
+    "reason": "Insertion requires understanding node structure"
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "edgeId": "edge-uuid-101",
+    "success": true
+  }
+  ```
+</Accordion>
+
+## Example subconcept DAG
+
+For the concept "Binary Search Trees", the agent might create this DAG:
+
+```
+         [BST Node Structure]
+                ↓
+         [BST Properties]
+            /         \
+           /           \
+    [Searching]    [Insertion]
+           \           /
+            \         /
+            [Deletion]
+                ↓
+          [Tree Traversals]
+                ↓
+        [Balancing (AVL intro)]
+```
+
+<Note>
+  The DAG structure allows multiple learning paths. Some students might learn Searching and Insertion in parallel, while others follow a linear path.
+</Note>
+
+## Diagnostic question generation
+
+The agent creates a mix of question types:
+
+### MCQ questions
+
+**Easy (difficulty 1-2)**:
+- Recall facts and definitions
+- Identify basic properties
+
+**Medium (difficulty 3)**:
+- Apply concepts to examples
+- Compare and contrast
+
+**Hard (difficulty 4-5)**:
+- Analyze complex scenarios
+- Synthesize multiple concepts
+
+### Open-ended questions
+
+**Short answer**:
+- Explain concepts in 2-3 sentences
+- Grading: keyword matching + semantic similarity
+
+**Long answer**:
+- Describe processes or algorithms
+- Grading: rubric-based with Claude evaluation
+
+## Parallel execution
+
+Subconcept Bootstrap Agents run in parallel (max 3 concurrent) after the Topic Agent completes:
+
+```typescript
+// From sprout-backend/src/routes/agents.ts
+router.post("/topics/:topicNodeId/run", async (req, res) => {
+  const sseWriter = createSSEWriter(res);
+  
+  // Phase 1: Topic Agent
+  sseWriter.send("agent_start", { agent: "topic" });
+  await runTopicAgent({ topicNodeId, userId, sseWriter });
+  sseWriter.send("agent_done", { agent: "topic" });
+  
+  // Phase 2: Subconcept Bootstrap Agents (parallel, max 3)
+  const concepts = await getConceptsByTopic(topicNodeId);
+  const limit = pLimit(3); // Concurrency limit
+  
+  const promises = concepts.map(concept =>
+    limit(async () => {
+      sseWriter.send("agent_start", { agent: `subconcept-${concept.id}` });
+      await runSubconceptBootstrapAgent({ conceptNodeId: concept.id, userId, sseWriter });
+      sseWriter.send("agent_done", { agent: `subconcept-${concept.id}` });
+    })
+  );
+  
+  await Promise.all(promises);
+  sseWriter.close();
+});
+```
+
+<Info>
+  The concurrency limit prevents overwhelming the Anthropic API with too many simultaneous requests.
+</Info>
+
+## SSE events
+
+The agent streams events during execution:
+
+```typescript
+eventSource.addEventListener("agent_start", (e) => {
+  const { agent } = JSON.parse(e.data);
+  if (agent.startsWith("subconcept-")) {
+    console.log("Subconcept bootstrap started for concept");
+  }
+});
+
+eventSource.addEventListener("node_created", (e) => {
+  const { node } = JSON.parse(e.data);
+  if (node.type === "subconcept") {
+    console.log(`Created subconcept: ${node.title}`);
+    // Add to graph
+  }
+});
+
+eventSource.addEventListener("edge_created", (e) => {
+  const { edge } = JSON.parse(e.data);
+  console.log(`Subconcept edge: ${edge.sourceNodeId} -> ${edge.targetNodeId}`);
+});
+```
+
+## Small mode
+
+In small mode, the agent creates:
+- **2-3 diagnostic questions** instead of 5-10
+- **2-3 subconcepts** instead of 8-12
+
+This is useful for testing without creating full learning structures.
+
+```bash
+curl -X POST http://localhost:8000/api/agents/topics/topic-123/run \
+  -H "Content-Type: application/json" \
+  -d '{ "small": true }'
+```
+
+<Warning>
+  Small mode creates minimal learning structures. The resulting graphs won't be comprehensive enough for real learning.
+</Warning>
+
+## Implementation details
+
+From `sprout-backend/src/agents/subconcept-bootstrap-agent.ts`:
+
+```typescript
+export async function runSubconceptBootstrapAgent({
+  conceptNodeId,
+  userId,
+  small = false,
+  sseWriter
+}: SubconceptAgentParams) {
+  // Load concept and parent topic
+  const concept = await db.query.nodes.findFirst({
+    where: eq(nodes.id, conceptNodeId)
+  });
+  
+  const topic = await db.query.nodes.findFirst({
+    where: eq(nodes.id, concept.branchId)
+  });
+  
+  // System prompt
+  const systemPrompt = `
+    You are an expert educator. Create a learning structure for:
+    Concept: ${concept.title}
+    ${concept.desc ? `Description: ${concept.desc}` : ""}
+    
+    Topic context: ${topic.title}
+    
+    ${small 
+      ? "Create 2-3 diagnostic questions and 2-3 subconcepts." 
+      : "Create 5-10 diagnostic questions and 8-12 subconcepts."}
+    
+    Mix MCQ and open-ended questions.
+    Vary difficulty from 1 (easy recall) to 5 (hard synthesis).
+    Arrange subconcepts as a DAG with clear prerequisites.
+  `;
+  
+  // Run agent loop
+  const result = await agentLoop({
+    systemPrompt,
+    userMessage: "Create the learning structure.",
+    tools: subconceptBootstrapTools,
+    maxIterations: 15,
+    callbacks: {
+      onThinking: (text) => sseWriter.send("agent_reasoning", { 
+        agent: `subconcept-${conceptNodeId}`, 
+        text 
+      }),
+      onToolCall: (tool, input) => sseWriter.send("tool_call", { tool, input }),
+      onToolResult: (tool, result) => {
+        const summary = result.substring(0, 200);
+        sseWriter.send("tool_result", { tool, summary });
+      }
+    }
+  });
+  
+  return result;
+}
+```
+
+## Question format examples
+
+### MCQ format
+
+```json
+{
+  "format": "mcq",
+  "prompt": "What is the worst-case time complexity of searching in a BST?",
+  "options": [
+    "O(1)",
+    "O(log n)",
+    "O(n)",
+    "O(n log n)"
+  ],
+  "correctAnswer": "O(n)",
+  "difficulty": 3
+}
+```
+
+### Open-ended format
+
+```json
+{
+  "format": "open_ended",
+  "prompt": "Describe the process of inserting a value into a binary search tree. Your answer should cover traversal logic and node creation.",
+  "gradingRubric": {
+    "key_points": [
+      "Start at root and compare with target value",
+      "Go left if target is smaller, right if larger",
+      "Repeat until reaching null pointer",
+      "Create new node at null position"
+    ],
+    "min_points_required": 3,
+    "passing_score": 0.7
+  },
+  "difficulty": 4
+}
+```
+
+<Info>
+  Open-ended questions use Claude for semantic grading. The rubric guides the grading agent to evaluate answer quality.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Refinement Agent" icon="wand-magic-sparkles" href="/agents/refinement-agent">
+    Learn how diagnostics adapt the learning path
+  </Card>
+  
+  <Card title="Grading Agent" icon="check-to-slot" href="/agents/grading-agent">
+    See how diagnostic answers are evaluated
+  </Card>
+</CardGroup>

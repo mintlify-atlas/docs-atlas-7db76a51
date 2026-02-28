@@ -1,0 +1,201 @@
+---
+title: Installation
+description: Prerequisites and dependencies for Sprout development
+---
+
+## Prerequisites
+
+Before setting up Sprout, ensure you have the following installed:
+
+<Steps>
+  <Step title="Node.js 20+">
+    Sprout requires Node.js version 20 or higher for both backend and frontend.
+    
+    ```bash
+    node --version  # Should be 20.x or higher
+    ```
+  </Step>
+
+  <Step title="npm Package Manager">
+    npm is used to install dependencies for both services.
+    
+    ```bash
+    npm --version
+    ```
+  </Step>
+
+  <Step title="Anaconda or Miniconda">
+    Required for the Python hand tracking service. Python 3.10 or 3.11+ recommended.
+    
+    ```bash
+    conda --version
+    ```
+    
+    <Note>
+      If you don't have Anaconda/Miniconda, download from [miniconda.org](https://docs.conda.io/en/latest/miniconda.html)
+    </Note>
+  </Step>
+
+  <Step title="Webcam Access">
+    A working webcam is required for hand tracking functionality. The system uses OpenCV to capture video at index 0 by default.
+  </Step>
+
+  <Step title="API Keys and Cloud Services">
+    - **Anthropic API Key**: Required for Claude-powered agents
+    - **AWS Credentials**: Required for S3 document uploads (optional if not using uploads)
+    - **AWS S3 Bucket**: For storing uploaded documents
+  </Step>
+</Steps>
+
+## Backend Dependencies
+
+Navigate to the backend directory and install Node.js dependencies:
+
+```bash
+cd sprout-backend
+npm install
+```
+
+### Key Backend Packages
+
+<CodeGroup>
+```json package.json
+{
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@aws-sdk/client-s3": "^3.995.0",
+    "better-sqlite3": "^12.6.2",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.45.1",
+    "express": "^5.2.1",
+    "multer": "^2.0.2",
+    "p-limit": "^7.3.0",
+    "pdf-parse": "^2.4.5",
+    "uuid": "^13.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.9",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
+```
+</CodeGroup>
+
+## Frontend Dependencies
+
+Navigate to the frontend directory and install dependencies:
+
+```bash
+cd sprout-frontend
+npm install
+```
+
+### Key Frontend Packages
+
+<CodeGroup>
+```json package.json
+{
+  "dependencies": {
+    "@dagrejs/dagre": "^2.0.4",
+    "@excalidraw/excalidraw": "^0.18.0",
+    "@xyflow/react": "^12.10.1",
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-force-graph-3d": "^1.29.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+```
+</CodeGroup>
+
+## Python Dependencies for Hand Tracking
+
+The hand tracking service requires specific versions to avoid compatibility issues.
+
+### Create Conda Environment
+
+```bash
+cd sprout-backend
+conda create -n sprout-cv python=3.11 -y
+conda activate sprout-cv
+```
+
+<Warning>
+  Python 3.10 or 3.11 is recommended. Avoid Python 3.12+ as MediaPipe may have compatibility issues.
+</Warning>
+
+### Install Python Packages
+
+<Tabs>
+  <Tab title="From requirements.txt">
+    ```bash
+    pip install -r requirements.txt
+    ```
+  </Tab>
+  <Tab title="Manual Installation">
+    ```bash
+    pip install mediapipe==0.10.14
+    pip install opencv-python==4.13.0.92
+    pip install websockets==12.0
+    pip install numpy==2.4.2
+    ```
+  </Tab>
+</Tabs>
+
+### Required Python Packages
+
+| Package | Version | Purpose |
+|---------|---------|----------|
+| `mediapipe` | 0.10.14 | Hand landmark detection |
+| `opencv-python` | 4.13.0.92 | Webcam capture and video processing |
+| `websockets` | 12.0 | WebSocket server for hand tracking data |
+| `numpy` | 2.4.2 | Array operations (auto-installed by mediapipe) |
+
+<Info>
+  If you encounter installation issues, use `--no-cache-dir` and `--default-timeout=100` flags:
+  ```bash
+  pip install -r requirements.txt --no-cache-dir --default-timeout=100
+  ```
+</Info>
+
+## Verify Installation
+
+Check that all dependencies are installed correctly:
+
+<CodeGroup>
+```bash Backend
+cd sprout-backend
+node --version   # 20+
+npm list         # Should show no errors
+```
+
+```bash Frontend
+cd sprout-frontend
+node --version
+npm list
+```
+
+```bash Hand Tracking
+conda activate sprout-cv
+python --version  # 3.10 or 3.11+
+pip list | grep mediapipe
+```
+</CodeGroup>
+
+## Next Steps
+
+<Card title="Configuration" icon="gear" href="/development/configuration">
+  Set up environment variables and configuration files
+</Card>
+
+<Card title="Database Migrations" icon="database" href="/development/database-migrations">
+  Initialize the SQLite database with Drizzle
+</Card>

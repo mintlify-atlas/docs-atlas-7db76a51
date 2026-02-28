@@ -1,0 +1,560 @@
+---
+title: Backend Architecture
+description: Express backend with AI agents, SSE streaming, and database orchestration
+---
+
+The Sprout backend is an Express 5 + TypeScript API that orchestrates AI agents, manages the learning graph database, and streams real-time progress via Server-Sent Events.
+
+## Core Structure
+
+### Server Entry Point
+
+The main server (`src/index.ts`) sets up routes and auto-seeds the default user:
+
+```typescript src/index.ts
+import express from "express";
+import cors from "cors";
+import { db } from "./db";
+import { users } from "./db/schema";
+
+const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+async function ensureDefaultUser() {
+  const existing = await db.select().from(users)
+    .where(eq(users.id, DEFAULT_USER_ID));
+  if (!existing.length) {
+    await db.insert(users).values({
+      id: DEFAULT_USER_ID,
+      email: "default@sprout.local",
+      title: "Default Learner",
+    });
+  }
+}
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Route mounting
+app.use("/api/branches", branchesRouter);
+app.use("/api/nodes", nodesRouter);
+app.use("/api/assessments", assessmentsRouter);
+app.use("/api/progress", progressRouter);
+app.use("/api/chat", chatRouter);
+app.use("/api/agents", agentsRouter);
+
+ensureDefaultUser().then(() => {
+  app.listen(8000, () => {
+    console.log("Sprout backend running on http://localhost:8000");
+  });
+});
+```
+
+## Route Structure
+
+### 1. Agents Routes (`/api/agents/*`)
+
+The agents router handles all AI agent orchestration:
+
+<CodeGroup>
+```typescript Topic Agent
+// POST /api/agents/topics/:topicNodeId/run
+// Two-phase pipeline: Topic Agent → Subconcept Bootstrap (parallel)
+router.post("/topics/:topicNodeId/run", async (req, res, next) => {
+  const { userId, small } = req.body;
+  const topicNode = await db.select().from(nodes)
+    .where(eq(nodes.id, req.params.topicNodeId));
+
+  const sse = initSSE(res);
+  sse.registerAgent();
+
+  // Phase 1: Generate concepts
+  const topicResult = await runTopicAgent({
+    userId, topicNode, sse, small: !!small
+  });
+
+  // Phase 2: Bootstrap subconcepts (max 3 concurrent)
+  const limit = pLimit(3);
+  const bootstrapPromises = topicResult.concepts.map((concept) => {
+    sse.registerAgent();
+    return limit(async () => {
+      await runSubconceptBootstrapAgent({
+        userId, conceptNode: concept.node,
+        topicTitle: topicNode.title,
+        documentContext: concept.documentContext,
+        sse, small: !!small,
+        generateQuestions: true
+      });
+      sse.resolveAgent();
+    });
+  });
+
+  await Promise.all(bootstrapPromises);
+  sse.send('agent_done', { agent: 'topic' });
+  sse.resolveAgent();
+});
+```
+
+```typescript Concept Refinement
+// POST /api/agents/concepts/:conceptNodeId/run
+// Two-phase response:
+// Phase 1 (no answers): Return diagnostic questions as JSON
+// Phase 2 (answers exist): Stream concept refinement via SSE
+router.post("/concepts/:conceptNodeId/run", async (req, res) => {
+  const { userId } = req.body;
+  const conceptNode = await db.select().from(nodes)
+    .where(eq(nodes.id, req.params.conceptNodeId));
+
+  const diagnostic = await ensureDiagnosticBundle(
+    userId, conceptNode, parentTopicTitle
+  );
+
+  const sse = initSSE(res);
+  sse.send('diagnostic_status', {
+    conceptNodeId: conceptNode.id,
+    assessment: diagnostic.assessment,
+    answeredCount: diagnostic.answeredCount,
+    requiredAnswers: diagnostic.requiredAnswers,
+  });
+
+  // Bootstrap subconcepts if missing
+  const existingSubconcepts = await db.select().from(nodes)
+    .where(and(
+      eq(nodes.parentId, conceptNode.id),
+      eq(nodes.type, 'subconcept')
+    ));
+
+  if (!existingSubconcepts.length) {
+    sse.registerAgent();
+    await runSubconceptBootstrapAgent({
+      userId, conceptNode, topicTitle, documentContext: null,
+      sse, small: false, generateQuestions: false
+    });
+    sse.resolveAgent();
+  }
+
+  // Run refinement using whatever answers exist (possibly zero)
+  sse.registerAgent();
+  await runConceptRefinementAgent({
+    userId, conceptNode, parentTopicTitle,
+    assessmentId: diagnostic.assessment.id,
+    assessmentQuestions: diagnostic.assessmentQuestions,
+    latestByQuestion: diagnostic.latestByQuestion,
+    sse
+  });
+  sse.send('agent_done', { agent: 'concept_refinement' });
+  sse.resolveAgent();
+});
+```
+
+```typescript Review Agent
+// POST /api/agents/nodes/:nodeId/review
+// Post-completion path enrichment
+router.post("/nodes/:nodeId/review", async (req, res) => {
+  const { userId, overview, maxAdditions } = req.body;
+  const currentNode = await db.select().from(nodes)
+    .where(eq(nodes.id, req.params.nodeId));
+
+  const { siblingNodes, siblingEdges } = await loadSiblingGraph(currentNode);
+  const finalOverview = await buildOverviewForNodeReview(
+    userId, currentNode, overview
+  );
+
+  const reviewDecision = await reviewLearningPath({
+    level: currentNode.type,
+    topicTitle,
+    currentNodeTitle: currentNode.title,
+    currentNodeDesc: currentNode.desc,
+    overview: finalOverview,
+    siblingNodes: siblingNodes.map(n => ({
+      title: n.title, desc: n.desc
+    })),
+    siblingEdges,
+    maxAdditions
+  });
+
+  if (!reviewDecision.should_add) {
+    return res.json({ status: 'no_change' });
+  }
+
+  // Insert new concepts or subconcepts
+  const insertionResult = await insertConceptAdditions(
+    userId, currentNode, reviewDecision.concept_additions
+  );
+
+  return res.json({
+    status: 'updated',
+    insertedNodes: insertionResult.insertedConcepts,
+    createdEdges: insertionResult.createdEdges
+  });
+});
+```
+</CodeGroup>
+
+### 2. Chat Routes (`/api/chat/*`)
+
+Handles tutor chat sessions:
+
+```typescript src/routes/chat.ts
+// POST /api/chat/sessions/:sessionId/tutor
+router.post("/sessions/:sessionId/tutor", async (req, res) => {
+  const { message, nodeId } = req.body;
+  const session = await db.select().from(chatSessions)
+    .where(eq(chatSessions.id, req.params.sessionId));
+
+  // Load full conversation history
+  const messages = await db.select().from(chatMessages)
+    .where(eq(chatMessages.sessionId, session.id))
+    .orderBy(chatMessages.createdAt);
+
+  // Run tutor agent with context
+  const response = await runTutorAgent({
+    userId: session.userId,
+    nodeId,
+    sessionId: session.id,
+    conversationHistory: messages,
+    studentMessage: message
+  });
+
+  // Persist messages
+  await db.insert(chatMessages).values([
+    { sessionId: session.id, role: 'user', content: message },
+    { sessionId: session.id, role: 'assistant', content: response.content }
+  ]);
+
+  return res.json(response);
+});
+```
+
+### 3. Document Routes (`/api/nodes/:nodeId/documents`)
+
+Handles S3 uploads for topic documents:
+
+```typescript Document Upload
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+router.post(
+  "/nodes/:nodeId/documents",
+  upload.array('files'),
+  async (req, res) => {
+    const files = req.files as Express.Multer.File[];
+    const nodeId = req.params.nodeId;
+
+    for (const file of files) {
+      const s3Key = `documents/${nodeId}/${uuid()}-${file.originalname}`;
+      
+      // Upload to S3
+      await s3Client.send(new PutObjectCommand({
+        Bucket: process.env.AWS_S3_BUCKET,
+        Key: s3Key,
+        Body: file.buffer,
+        ContentType: file.mimetype
+      }));
+
+      // Extract text from PDF
+      let extractedText = null;
+      if (file.mimetype === 'application/pdf') {
+        const pdf = await pdfParse(file.buffer);
+        extractedText = pdf.text;
+      }
+
+      // Save to database
+      await db.insert(topicDocuments).values({
+        id: uuid(),
+        nodeId,
+        originalFilename: file.originalname,
+        s3Key,
+        mimeType: file.mimetype,
+        fileSizeBytes: file.size,
+        extractedText,
+        extractionStatus: 'completed'
+      });
+    }
+
+    return res.json({ uploaded: files.length });
+  }
+);
+```
+
+## Agent Loop Architecture
+
+All agents use a shared loop (`src/agents/agent-loop.ts`) for tool calling:
+
+```typescript Agent Loop
+export async function agentLoop({
+  messages,
+  tools,
+  maxIterations = 15,
+  onThinking,
+  onToolCall,
+  onToolResult
+}: AgentLoopOptions): Promise<AgentLoopResult> {
+  const conversationHistory = [...messages];
+  const allToolCalls: ToolCall[] = [];
+  let finalText = '';
+  let iterations = 0;
+
+  while (iterations < maxIterations) {
+    iterations++;
+
+    const response = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 8000,
+      messages: conversationHistory,
+      tools
+    });
+
+    // Extract reasoning text
+    const textBlocks = response.content.filter(b => b.type === 'text');
+    if (textBlocks.length && onThinking) {
+      const thinkingText = textBlocks.map(b => b.text).join('\n');
+      onThinking(thinkingText);
+      finalText = thinkingText;
+    }
+
+    // Process tool calls
+    const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
+    if (!toolUseBlocks.length) {
+      break; // Claude stopped calling tools
+    }
+
+    const toolResults = [];
+    for (const toolBlock of toolUseBlocks) {
+      if (onToolCall) onToolCall(toolBlock.name, toolBlock.input);
+
+      const tool = tools.find(t => t.name === toolBlock.name);
+      const result = await tool.execute(toolBlock.input);
+      allToolCalls.push({ name: toolBlock.name, input: toolBlock.input });
+
+      if (onToolResult) onToolResult(toolBlock.name, result);
+      
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolBlock.id,
+        content: typeof result === 'string' ? result : JSON.stringify(result)
+      });
+    }
+
+    // Feed results back to Claude
+    conversationHistory.push(
+      { role: 'assistant', content: response.content },
+      { role: 'user', content: toolResults }
+    );
+
+    if (response.stop_reason === 'end_turn') break;
+  }
+
+  return { finalText, toolCalls: allToolCalls, iterations };
+}
+```
+
+<Note>
+The agent loop includes **retry with exponential backoff** for 429 rate limits (2s, 4s, 8s delays).
+</Note>
+
+## SSE Streaming Implementation
+
+The SSE writer (`src/utils/sse.ts`) handles real-time event delivery:
+
+```typescript src/utils/sse.ts
+export interface SSEWriter {
+  send(event: string, data: object): void;
+  close(): void;
+  registerAgent(): void;
+  resolveAgent(): void;
+}
+
+const DRAIN_INTERVAL_MS = 50;
+
+export function initSSE(res: Response): SSEWriter {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const queue: QueueItem[] = [];
+  let agentCount = 0;
+  let closed = false;
+
+  function drain() {
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      const payload = `event: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`;
+      res.write(payload);
+    }
+    if (typeof res.flush === 'function') res.flush();
+  }
+
+  const interval = setInterval(drain, DRAIN_INTERVAL_MS);
+
+  return {
+    send(event, data) {
+      if (closed) return;
+      queue.push({ event, data });
+    },
+
+    close() {
+      if (closed) return;
+      closed = true;
+      clearInterval(interval);
+      drain();
+      res.end();
+    },
+
+    registerAgent() {
+      agentCount++;
+    },
+
+    resolveAgent() {
+      agentCount = Math.max(0, agentCount - 1);
+      if (agentCount === 0) {
+        setTimeout(() => this.close(), DRAIN_INTERVAL_MS * 2);
+      }
+    }
+  };
+}
+```
+
+### SSE Event Types
+
+<Tabs>
+  <Tab title="Agent Events">
+    - `agent_start`: Agent has started
+    - `agent_reasoning`: Claude's reasoning text
+    - `agent_done`: Agent completed successfully
+    - `agent_error`: Agent failed with error
+  </Tab>
+  <Tab title="Graph Events">
+    - `node_created`: New node persisted to DB
+    - `edge_created`: New edge persisted to DB
+    - `node_removed`: Node deleted
+    - `edge_removed`: Edge deleted
+  </Tab>
+  <Tab title="Tool Events">
+    - `tool_call`: Tool invocation
+    - `tool_result`: Tool result (truncated to 200 chars)
+  </Tab>
+  <Tab title="Diagnostic Events">
+    - `diagnostic_status`: Assessment readiness
+    - `json_response`: Agent returned JSON data
+  </Tab>
+</Tabs>
+
+## Agent Tools
+
+Each agent has access to specific tools that persist data to the database:
+
+<CodeGroup>
+```typescript Topic Agent Tools
+{
+  name: 'extract_all_concept_contexts',
+  description: 'Batch-extract relevant document sections for all concepts',
+  input_schema: {
+    concepts: [{ title, desc, relevantKeywords }]
+  }
+},
+{
+  name: 'save_concept',
+  description: 'Create a concept node in the DB',
+  input_schema: { title, desc, documentContext }
+},
+{
+  name: 'save_concept_edge',
+  description: 'Create a dependency edge between concepts',
+  input_schema: { sourceTitle, targetTitle }
+}
+```
+
+```typescript Concept Refinement Tools
+{
+  name: 'grade_student_answers',
+  description: 'Grade diagnostic answers via grading sub-agent'
+},
+{
+  name: 'get_current_subconcepts',
+  description: 'View existing subconcept graph'
+},
+{
+  name: 'check_student_history',
+  description: 'Cross-concept performance (mastery scores, completed nodes)'
+},
+{
+  name: 'add_subconcept',
+  description: 'Add a bridge/remedial subconcept for knowledge gaps'
+},
+{
+  name: 'remove_subconcept',
+  description: 'Remove a mastered subconcept (reconnects edges)'
+},
+{
+  name: 'validate_graph',
+  description: 'Check for orphans, broken edges, unreachable nodes via BFS'
+}
+```
+
+```typescript Tutor Agent Tools
+{
+  name: 'check_student_progress',
+  description: 'Load diagnostic results for parent concept'
+},
+{
+  name: 'check_prerequisite_mastery',
+  description: 'Check if prerequisite subconcepts are mastered'
+},
+{
+  name: 'generate_example',
+  description: 'Create a worked example for illustration'
+},
+{
+  name: 'create_exercise',
+  description: 'Create a practice problem for the student'
+},
+{
+  name: 'record_exercise_result',
+  description: 'Persist exercise attempt + update mastery score'
+}
+```
+</CodeGroup>
+
+<Info>
+Tools **persist data directly** — their return values are used only for confirmation. This ensures all graph mutations are immediately visible to other agents and streamed to the frontend.
+</Info>
+
+## Error Handling
+
+Global error handler catches all route errors:
+
+```typescript src/middleware/error-handler.ts
+export function errorHandler(
+  err: Error,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  console.error('Error:', err);
+  
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  res.status(500).json({
+    error: err.message || 'Internal server error'
+  });
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agent Deep Dive" icon="robot" href="/agents/introduction">
+    Learn about each of the seven AI agents
+  </Card>
+  <Card title="Database Schema" icon="database" href="/architecture/database">
+    Explore the SQLite data model
+  </Card>
+</CardGroup>

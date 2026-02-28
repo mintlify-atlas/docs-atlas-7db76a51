@@ -1,0 +1,132 @@
+---
+title: Creating Topics
+description: Learn how to create learning topics and upload supporting documents
+---
+
+Topics are the foundation of your learning journey in Sprout. When you create a topic, Sprout's AI agents analyze your learning materials and design a personalized curriculum.
+
+## Creating a New Topic
+
+<Steps>
+  <Step title="Create a topic node">
+    Start by creating a topic with a clear title and description. The topic represents what you want to learn — for example, "Linear Algebra" or "React Hooks".
+
+    Topics are stored as nodes with `type="root"` in the database. Each topic belongs to a branch and is associated with your user account.
+  </Step>
+
+  <Step title="Upload learning materials">
+    Upload documents that contain the content you want to learn. Sprout supports:
+
+    - PDF files (`application/pdf`)
+    - Plain text files (`text/plain`)
+    - Markdown files (`text/markdown`, `text/x-markdown`)
+
+    **File size limit:** 10 MB per file
+
+    **Maximum files:** 5 files per upload
+
+    Each document is automatically processed:
+    1. Uploaded to S3 storage
+    2. Text is extracted and stored in the database
+    3. Extraction status is tracked (`pending`, `completed`, or `failed`)
+  </Step>
+
+  <Step title="Generate your learning path">
+    Once documents are uploaded, trigger the Topic Agent to generate your personalized learning path:
+
+    ```bash
+    POST /api/agents/topics/:topicNodeId/run
+    {
+      "userId": "your-user-id",
+      "small": false  // Set to true for quick testing (1-2 concepts)
+    }
+    ```
+
+    The Topic Agent will:
+    - Analyze your uploaded documents
+    - Generate 6-10 major concepts (or 1-2 if `small: true`)
+    - Extract relevant context from your documents for each concept
+    - Create dependency relationships between concepts
+    - Stream progress updates via Server-Sent Events (SSE)
+  </Step>
+</Steps>
+
+<Info>
+The learning path generation happens in two phases:
+1. **Topic Agent** creates the concept sequence
+2. **Subconcept Bootstrap Agents** run in parallel (max 3 concurrent) to build the learning structure for each concept
+</Info>
+
+## Document Management
+
+### Viewing Uploaded Documents
+
+Retrieve all documents for a topic:
+
+```bash
+GET /api/nodes/:nodeId/documents
+```
+
+Response includes:
+- Document ID and filename
+- File size and MIME type
+- Extraction status
+- Upload timestamp
+
+### Deleting Documents
+
+Remove a document from your topic:
+
+```bash
+DELETE /api/nodes/:nodeId/documents/:documentId
+```
+
+This deletes both the database record and the file from S3 storage.
+
+## Behind the Scenes: How Topics Are Generated
+
+When you run the Topic Agent, it uses Claude to:
+
+1. **Plan the concept sequence** — Decides which major concepts to teach and in what order
+2. **Extract document context** — Uses the `extract_all_concept_contexts` tool to batch-extract relevant sections from your uploaded documents
+3. **Save concepts** — Creates each concept node using the `save_concept` tool
+4. **Wire dependencies** — Creates edges between concepts using `save_concept_edge` to represent the learning order
+
+### Real-Time Progress Updates
+
+The agent streams events via SSE so you can track progress:
+
+| Event | Description |
+|-------|-------------|
+| `agent_start` | Topic Agent has started |
+| `agent_reasoning` | Claude's reasoning between tool calls |
+| `tool_call` | Tool invocation (e.g., saving a concept) |
+| `node_created` | New concept node created |
+| `edge_created` | Dependency edge created |
+| `agent_done` | Topic Agent completed successfully |
+
+<Note>
+After the Topic Agent completes, Subconcept Bootstrap Agents automatically run for each concept to create diagnostic questions and subconcepts. This happens concurrently with a limit of 3 agents at a time to prevent rate limiting.
+</Note>
+
+## Small Mode for Testing
+
+During development or testing, use `small: true` to generate a minimal learning path:
+
+- **1-2 concepts** instead of 6-10
+- **2-3 subconcepts** per concept instead of 8-12
+- **2-3 diagnostic questions** instead of 5-10
+
+This dramatically reduces API costs and generation time while still demonstrating the full workflow.
+
+## Next Steps
+
+After your topic is created and the learning path is generated:
+
+1. Take the diagnostic assessment for each concept to personalize your learning
+2. Review the adaptive learning graph that Sprout builds based on your answers
+3. Start learning with the AI tutor
+
+<Info>
+You can view your learning path structure by querying nodes and edges for your topic. Each concept contains multiple subconcepts arranged in a DAG (Directed Acyclic Graph) that represents prerequisite relationships.
+</Info>

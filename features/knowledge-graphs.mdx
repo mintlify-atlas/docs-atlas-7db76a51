@@ -1,0 +1,192 @@
+---
+title: '3D Knowledge Graphs'
+description: 'Interactive 3D visualization of personalized learning pathways'
+icon: 'network-wired'
+---
+
+## Overview
+
+Sprout visualizes your entire learning journey as an interactive 3D knowledge graph. Each topic, concept, and subconcept appears as a node in a force-directed graph that reveals the relationships and dependencies between ideas.
+
+<Info>
+  The graph is not just a visualization—it's a living representation of your personalized learning path that adapts based on your diagnostic results and progress.
+</Info>
+
+## Graph Architecture
+
+### Node Types
+
+The knowledge graph contains three distinct node types, each with specific visual styling and behavior:
+
+<CardGroup cols={3}>
+  <Card title="Root Nodes" icon="circle">
+    **Topic Level**
+    
+    White spheres (radius: 3) representing the main topic. The root node is the entry point for your entire learning path.
+  </Card>
+  
+  <Card title="Concept Nodes" icon="circle-dot">
+    **Concept Level**
+    
+    Colored spheres (radius: 2) representing major concepts. Colors are assigned using golden-angle hue spacing (137.5° rotation) for optimal visual distinction between branches.
+  </Card>
+  
+  <Card title="Subconcept Nodes" icon="circle-small">
+    **Subconcept Level**
+    
+    Smaller spheres (radius: 1) representing specific learning objectives. These form directed acyclic graphs (DAGs) under each concept.
+  </Card>
+</CardGroup>
+
+### Graph Layout
+
+The 3D graph uses a force-directed simulation powered by D3.js with custom forces:
+
+- **Branch clustering**: Concepts from the same learning branch are pulled toward radial positions around the origin (200px radius)
+- **Charge force**: Nodes repel each other with -80 strength to prevent overlap
+- **Link force**: Connected nodes maintain 40px distance
+- **Pinning system**: After 500ms of settling, nodes are fixed in place to prevent drift
+
+```typescript
+// Branch clustering (from graph-utils.ts)
+forceX((node) => {
+  if (!node.branchId) return 0;
+  return branchCenters.get(node.branchId)?.x ?? 0;
+}).strength(0.3)
+```
+
+## Visual States
+
+### Node Appearance
+
+Nodes dynamically update their appearance based on learning progress:
+
+<Tabs>
+  <Tab title="Unlocked">
+    Fully opaque nodes (opacity: 1.0) with bright colors indicating available content. When focused, nodes emit light with 0.6 emissive intensity.
+  </Tab>
+  
+  <Tab title="Locked">
+    Reduced opacity (0.6) indicates prerequisites have not been met. These nodes cannot be clicked until dependencies are completed.
+  </Tab>
+  
+  <Tab title="Completed">
+    Full opacity with completion status reflected in the node data. Completed nodes maintain visual prominence while indicating mastery.
+  </Tab>
+</Tabs>
+
+### Edge Rendering
+
+Two types of edges connect nodes:
+
+1. **Dependency edges**: Represent prerequisite relationships between subconcepts (learned via diagnostic analysis)
+2. **Structural edges**: Parent-child relationships in the graph hierarchy
+
+Edge visibility adapts to branch focus:
+- Global view: `rgba(255, 255, 255, 0.06)` - subtle connections
+- Branch focused: `rgba(255, 255, 255, 0.15)` - emphasized relationships
+- Cross-branch: `rgba(0, 0, 0, 0)` - hidden when irrelevant
+
+## Navigation
+
+### Camera Controls
+
+<CardGroup cols={2}>
+  <Card title="Click to Focus" icon="hand-pointer">
+    Click any node to zoom in and center the camera. The camera smoothly transitions (600ms) to position 150 units above the node.
+  </Card>
+  
+  <Card title="Branch Highlighting" icon="filter">
+    Select a branch from the sidebar to highlight all concepts and subconcepts in that learning path. Irrelevant nodes fade or disappear entirely.
+  </Card>
+  
+  <Card title="Drag Nodes" icon="arrows-up-down-left-right">
+    Click and drag nodes to manually reposition them. The force simulation respects pinned positions after settling.
+  </Card>
+  
+  <Card title="Zoom to Fit" icon="maximize">
+    Automatically fits the entire graph in view with 50px padding on initial load or when clearing branch filters.
+  </Card>
+</CardGroup>
+
+### Labels
+
+Node labels render as canvas-based sprites positioned below each sphere:
+
+- **Always visible**: Root and concept nodes
+- **Conditionally visible**: Subconcept labels only appear when their parent branch is focused
+- **Opacity**: Labels inherit node opacity (80% of node opacity for subtle effect)
+
+## Real-Time Updates
+
+The graph responds to SSE (Server-Sent Events) from AI agents:
+
+<Note>
+  As agents generate your learning path, new nodes and edges stream in real-time. Watch your knowledge graph grow as the system designs your personalized curriculum.
+</Note>
+
+### SSE Events
+
+| Event | Effect |
+|-------|--------|
+| `node_created` | New sphere appears near its parent with seeded position offset (±15px) |
+| `edge_created` | Force simulation updates with new link constraint |
+| `node_removed` | Concept refinement agent removes mastered subconcepts |
+| `edge_removed` | Graph topology updates when agents restructure dependencies |
+
+## Branch Color System
+
+Branches (concept sequences) receive stable colors using the golden ratio:
+
+```typescript
+// From graph-utils.ts
+const hue = (branchIndex * 137.5) % 360;
+const branchColors = {
+  concept: `hsl(${hue}, 80%, 65%)`,      // Bright, saturated
+  subconcept: `hsl(${hue}, 50%, 35%)`    // Darker variant
+};
+```
+
+This ensures maximum perceptual distance between adjacent branches while maintaining visual harmony.
+
+## Technical Implementation
+
+### Performance Optimizations
+
+1. **Node reuse**: Existing nodes preserve their force simulation state when the graph updates
+2. **Selective rendering**: Hidden branch nodes render as invisible 0-radius spheres to minimize draw calls
+3. **Cooldown tuning**: 100 ticks with 0.08 alpha decay balances settling speed vs. visual smoothness
+4. **Pin persistence**: Once settled, nodes are fixed (`fx`, `fy`, `fz`) to prevent unnecessary simulation
+
+### Three.js Rendering
+
+Each node is a `THREE.Mesh` with `THREE.SphereGeometry` and `THREE.MeshStandardMaterial`:
+
+- 16x16 segments for smooth spheres
+- Transparent material for opacity transitions
+- Emissive property for focus highlighting
+- Canvas texture sprites for performant text labels
+
+<Info>
+  The graph runs at 60 FPS with dynamic lighting, supporting smooth camera transitions and real-time node manipulation.
+</Info>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Path Overview" icon="map">
+    See the entire scope of a topic at a glance. Understand how concepts build on each other before diving into content.
+  </Card>
+  
+  <Card title="Progress Tracking" icon="chart-line">
+    Visual feedback on completed vs. locked nodes. Identify which concepts unlock next as you progress.
+  </Card>
+  
+  <Card title="Prerequisite Discovery" icon="link">
+    Follow edges to understand why certain concepts must be learned first. The DAG structure prevents circular dependencies.
+  </Card>
+  
+  <Card title="Personalized Structure" icon="wand-magic-sparkles">
+    After diagnostics, the graph adapts—subconcepts you've mastered disappear, while remedial nodes appear for knowledge gaps.
+  </Card>
+</CardGroup>

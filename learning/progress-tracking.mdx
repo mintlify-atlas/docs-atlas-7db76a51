@@ -1,0 +1,279 @@
+---
+title: Progress Tracking
+description: Understanding mastery scores, completion tracking, and learning analytics
+---
+
+Sprout tracks your progress through every node in your learning path, measuring mastery with a continuous score from 0 to 1. This data powers adaptive learning decisions and helps you see exactly where you stand.
+
+## Mastery Score System
+
+Every node (concept or subconcept) has a mastery score that represents your level of understanding:
+
+- **0.0** — Not started or complete lack of understanding
+- **0.3-0.5** — Partial understanding, significant gaps
+- **0.7** — Mastery threshold (considered "mastered")
+- **1.0** — Complete mastery
+
+<Info>
+The mastery threshold of 0.7 is used throughout Sprout to make learning decisions. For example, the tutor checks if prerequisite subconcepts have `masteryScore >= 0.7` before teaching dependent concepts.
+</Info>
+
+## Progress Data Structure
+
+Progress is tracked in the `userNodeProgress` table:
+
+```typescript
+{
+  id: string,
+  userId: string,
+  nodeId: string,
+  firstEnteredAt: string | null,
+  lastEnteredAt: string | null,
+  completedAt: string | null,
+  masteryScore: number,          // 0-1, default 0
+  attemptsCount: number,         // How many times you've entered this node
+  hasGeneratedSubnodes: boolean, // Whether subconcepts have been generated
+  createdAt: string,
+  updatedAt: string
+}
+```
+
+### Unique Constraint
+
+Each user can have only one progress record per node (enforced by unique index on `userId` + `nodeId`).
+
+## Retrieving Progress
+
+Get progress for all nodes:
+
+```bash
+GET /api/progress?userId=your-user-id
+```
+
+Get progress for a specific node:
+
+```bash
+GET /api/progress?userId=your-user-id&nodeId=node-id
+```
+
+Response is an array of progress records.
+
+## Recording Progress
+
+When you enter a node for the first time:
+
+```bash
+POST /api/progress
+{
+  "userId": "your-user-id",
+  "nodeId": "node-id"
+}
+```
+
+This creates a progress record with:
+- `firstEnteredAt` = current timestamp
+- `lastEnteredAt` = current timestamp
+- `attemptsCount` = 1
+- `masteryScore` = 0.0
+
+If the record already exists:
+- `lastEnteredAt` is updated to current timestamp
+- `attemptsCount` is incremented
+- Other fields remain unchanged
+
+<Note>
+The system uses app-level upsert logic (not database-level UPSERT) — it checks for existing records and either creates or updates accordingly.
+</Note>
+
+## Updating Mastery Scores
+
+Update mastery score after completing exercises:
+
+```bash
+PATCH /api/progress/:progressId
+{
+  "masteryScore": 0.85,
+  "completedAt": "2026-02-28T12:00:00Z"  // Optional
+}
+```
+
+The `masteryScore` is typically updated by:
+
+1. **Tutor Agent** — Calls `record_exercise_result` after you answer checkpoint questions correctly
+2. **Concept Refinement Agent** — May adjust scores based on diagnostic results
+3. **Manual updates** — Via the API if needed
+
+### How Mastery Scores Increase
+
+During tutoring, the Tutor Agent uses the `record_exercise_result` tool:
+
+```typescript
+{
+  exerciseId: string,
+  wasCorrect: boolean,
+  scoreChange: number  // Typically 0.1-0.2 per correct answer
+}
+```
+
+Each correct checkpoint answer increases your mastery score incrementally until you reach the threshold.
+
+## Completion Tracking
+
+### When Is a Node Complete?
+
+A node is considered complete when:
+
+1. **Mastery score ≥ 0.7** (the mastery threshold)
+2. **`completedAt` timestamp is set**
+
+The `completedAt` field is typically set:
+- When the tutor finishes teaching all chunks and you've answered all checkpoint questions
+- When the Concept Refinement Agent determines you've already mastered the concept (and removes it from your path)
+
+### Marking Nodes Complete
+
+```bash
+PATCH /api/progress/:progressId
+{
+  "completedAt": "2026-02-28T12:00:00Z"
+}
+```
+
+Or let the system auto-complete when the tutor marks `[COMPLETE]`.
+
+## Progress Analytics
+
+The Concept Refinement Agent uses the `check_student_history` tool to analyze your progress across the entire learning path:
+
+```typescript
+{
+  masteryScoresByNode: Map<string, number>,
+  completedNodes: string[],
+  overallLevel: "beginner" | "intermediate" | "advanced",
+  strugglingTopics: string[],
+  strengths: string[]
+}
+```
+
+This data informs decisions like:
+- Should we add prerequisite concepts?
+- Can we remove subconcepts you've already mastered?
+- Should we add enrichment material?
+
+<Info>
+The agent doesn't just look at the current concept — it analyzes your performance across all related concepts to understand your overall level and learning patterns.
+</Info>
+
+## Progress in the Learning DAG
+
+Progress through your learning path follows the DAG structure:
+
+1. **Start nodes** — Nodes with no prerequisites (no incoming edges)
+2. **Dependent nodes** — Nodes that require prerequisites to be mastered first
+3. **Completion** — When all nodes in a concept or topic are completed
+
+### Checking Prerequisites
+
+Before teaching a subconcept, the Tutor Agent calls `check_prerequisite_mastery`:
+
+```typescript
+{
+  subconceptId: string,
+  prerequisites: Array<{
+    nodeId: string,
+    title: string,
+    masteryScore: number,
+    isMastered: boolean  // true if masteryScore >= 0.7
+  }>
+}
+```
+
+If prerequisites aren't mastered, the tutor suggests reviewing them first.
+
+## Accuracy Score vs. Mastery Score
+
+Nodes also have an `accuracyScore` field (0-1) which is different from `masteryScore`:
+
+- **`nodes.accuracyScore`** — Stored on the node itself, represents average performance across all users (future feature)
+- **`userNodeProgress.masteryScore`** — User-specific score representing individual mastery
+
+Currently, `accuracyScore` defaults to 0 and isn't actively used. All personalization is based on `masteryScore`.
+
+## Attempts Tracking
+
+The `attemptsCount` field tracks how many times you've entered a node:
+
+- Useful for identifying nodes you're struggling with
+- Incremented every time you call `POST /api/progress` for an existing record
+- Used by the Review Learning Path agent to decide if enrichment material is needed
+
+<Note>
+High `attemptsCount` with low `masteryScore` indicates you're stuck. The system may suggest adding bridge subconcepts or prerequisite concepts to help you build foundations.
+</Note>
+
+## Generation Status
+
+The `hasGeneratedSubnodes` flag tracks whether subconcepts have been generated for a concept:
+
+```bash
+PATCH /api/progress/:progressId
+{
+  "hasGeneratedSubnodes": true
+}
+```
+
+This prevents duplicate generation if the subconcept bootstrap process runs multiple times.
+
+## Example: Full Learning Journey
+
+1. **Create topic** → Upload documents → Generate learning path
+2. **Enter first concept** → `POST /api/progress` creates record with `attemptsCount: 1`
+3. **Take diagnostic** → Answer questions → Concept refined
+4. **Enter first subconcept** → `POST /api/progress` creates subconcept record
+5. **Tutor teaches chunk 1** → Answer checkpoint → `masteryScore` increases from 0.0 to 0.15
+6. **Complete all chunks** → `masteryScore` reaches 0.7 → `completedAt` set → Session ends
+7. **Move to next subconcept** → Tutor checks prerequisites, sees 0.7 mastery, allows progress
+8. **Repeat** for all subconcepts in the concept
+9. **Complete concept** → Overall progress tracked across all subconcepts
+
+## Viewing Overall Progress
+
+To see your progress across an entire topic:
+
+1. Query all nodes in the topic (by `branchId` or `parentId`)
+2. Query progress for each node
+3. Calculate:
+   - Total nodes vs. completed nodes
+   - Average mastery score
+   - Which nodes are currently available (prerequisites met)
+   - Which nodes are blocked (prerequisites not met)
+
+## Post-Completion Review
+
+After completing a concept or subconcept, you can trigger the Review Learning Path agent:
+
+```bash
+POST /api/agents/nodes/:nodeId/review
+{
+  "userId": "your-user-id",
+  "overview": "Optional context about your learning experience",
+  "maxAdditions": 3  // Max new nodes to add
+}
+```
+
+The agent analyzes your progress data and may add:
+- **Enrichment concepts** — Advanced topics for deeper understanding
+- **Reinforcement subconcepts** — Extra practice for weak areas
+
+This ensures your learning path evolves as you progress.
+
+<Info>
+The Review Learning Path agent uses your progress data, diagnostic results, and overall mastery patterns to make intelligent decisions about enrichment. It won't add material you don't need.
+</Info>
+
+## Next Steps
+
+- Use progress data to visualize your learning journey
+- Identify struggling areas and request additional help
+- Track mastery scores over time to measure improvement
+- Complete all subconcepts to master entire concepts

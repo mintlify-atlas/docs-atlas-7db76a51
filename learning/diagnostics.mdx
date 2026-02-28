@@ -1,0 +1,213 @@
+---
+title: Diagnostic Assessments
+description: How diagnostic assessments work and how they adapt your learning path
+---
+
+Diagnostic assessments are Sprout's way of understanding what you already know before teaching you. They're not tests — they're conversations that help Sprout personalize your learning path.
+
+## How Diagnostics Work
+
+Every concept in your learning path has a diagnostic assessment that measures your existing knowledge. Based on your answers, Sprout adapts the subconcept graph to fill gaps and skip material you've already mastered.
+
+### The Diagnostic Flow
+
+<Steps>
+  <Step title="Diagnostic questions are generated">
+    When the Subconcept Bootstrap Agent runs for a concept, it automatically creates 5-10 diagnostic questions (or 2-3 in small mode).
+
+    Questions are strategically designed with:
+    - **Mixed formats:** Multiple choice (MCQ) and open-ended questions
+    - **Mixed difficulty:** Ranges from 1 (basic) to 5 (advanced)
+    - **Targeted coverage:** Each question maps to specific knowledge gaps
+  </Step>
+
+  <Step title="You answer the questions">
+    Submit your answers via the API:
+
+    ```bash
+    POST /api/assessments/:assessmentId/answers
+    {
+      "userId": "your-user-id",
+      "questionId": "question-id",
+      "answerText": "Your written response",     // For open-ended
+      "selectedOption": "B",                      // For MCQ
+    }
+    ```
+
+    The system tracks:
+    - Your answer text or selected option
+    - Timestamp of submission
+    - Auto-completion when all questions are answered
+  </Step>
+
+  <Step title="Answers are graded">
+    The Concept Refinement Agent uses a specialized grading sub-agent to evaluate your responses:
+
+    - **MCQ questions:** Automatically compared to the correct answer
+    - **Open-ended questions:** Evaluated semantically by Claude for conceptual understanding
+    - **Partial credit:** Scored on a 0-1 scale (not just right/wrong)
+    - **Detailed feedback:** One-sentence explanation for each answer
+  </Step>
+
+  <Step title="Learning path adapts">
+    Based on your diagnostic results, the Concept Refinement Agent personalizes your subconcept graph using the Observe-Reason-Act-Verify loop.
+  </Step>
+</Steps>
+
+## Question Formats
+
+### Multiple Choice Questions (MCQ)
+
+MCQ questions test specific factual knowledge:
+
+```json
+{
+  "format": "mcq",
+  "prompt": "Which operation preserves the solution set of a linear system?",
+  "options": ["A) Multiplying a row by zero", "B) Swapping two rows", "C) Adding a variable"],
+  "correctAnswer": "B",
+  "difficulty": 2
+}
+```
+
+Grading is automatic: your `selectedOption` is compared to `correctAnswer`.
+
+### Open-Ended Questions
+
+Open-ended questions evaluate deeper understanding:
+
+```json
+{
+  "format": "open_ended",
+  "prompt": "Explain why row operations don't change the solution set of a linear system.",
+  "correctAnswer": "Row operations create equivalent systems by applying reversible transformations...",
+  "gradingRubric": {
+    "key_concepts": ["reversibility", "equivalent systems", "same solution set"],
+    "partial_credit": true
+  },
+  "difficulty": 3
+}
+```
+
+Grading uses Claude to:
+- Compare your answer semantically to the expected answer
+- Check for key concepts (doesn't require word-for-word match)
+- Assign partial credit (e.g., 0.3 if you identified the right concept but confused details)
+- Provide constructive feedback
+
+<Note>
+The grading agent is designed to be generous with partial credit. Students don't need to match expected answers word-for-word — they just need to demonstrate understanding.
+</Note>
+
+## The Observe-Reason-Act-Verify Loop
+
+After you complete a diagnostic, the Concept Refinement Agent runs through a structured process:
+
+### 1. GRADE
+Call `grade_student_answers` to grade all responses using the grading sub-agent.
+
+### 2. OBSERVE
+- Call `get_current_subconcepts` to view the existing subconcept DAG
+- Call `check_student_history` to analyze your cross-concept performance, mastery scores, and overall level
+
+### 3. REASON
+Claude analyzes:
+- Knowledge gaps from low-scoring diagnostic questions
+- Misconceptions revealed in feedback
+- Mastery patterns (e.g., strong fundamentals but weak on applications)
+
+### 4. ACT
+The agent modifies your learning graph:
+
+| Tool | Purpose |
+|------|----------|
+| `add_subconcept` | Insert bridge/remedial subconcepts for knowledge gaps |
+| `remove_subconcept` | Remove subconcepts you've already mastered (reconnects edges automatically) |
+| `add_prerequisite_concept` | Insert an entire concept BEFORE the current one if you're missing foundations |
+| `add_followup_concept` | Insert a concept AFTER for reinforcement or enrichment |
+
+### 5. VERIFY
+Call `validate_graph` to check for:
+- Orphaned nodes (no incoming or outgoing edges)
+- Broken edges (missing nodes)
+- Unreachable nodes (not connected to the main path)
+
+### 6. VERIFY AGAIN
+Confirm the graph is clean and ready for learning.
+
+<Info>
+This is Sprout's **star feature** — autonomous agents that observe, reason, act, and verify their own changes to create a personalized learning path.
+</Info>
+
+## Diagnostic Summary Data
+
+After grading, the system generates a diagnostic summary:
+
+```typescript
+{
+  assessmentId: string,
+  answeredCount: number,
+  totalQuestions: number,
+  overallScore: number | null,  // Average score 0-1
+  strengths: string[],          // Prompts you scored ≥0.7 on
+  gaps: string[],               // Prompts you scored <0.7 on
+  items: [
+    {
+      questionId: string,
+      prompt: string,
+      format: "mcq" | "open_ended",
+      difficulty: number,
+      studentAnswer: string | null,
+      correctAnswer: string | null,
+      isCorrect: boolean | null,
+      score: number | null,  // Normalized 0-1
+      feedback: string | null
+    }
+  ]
+}
+```
+
+This data is used by the Concept Refinement Agent to make intelligent decisions about your learning path.
+
+## Viewing Your Diagnostic
+
+Retrieve diagnostic status for a concept:
+
+```bash
+GET /api/agents/concepts/:conceptNodeId/diagnostic?userId=your-user-id
+```
+
+Response includes:
+- Assessment metadata
+- All questions
+- How many you've answered
+- Whether the assessment is complete
+
+## Triggering Refinement
+
+Once you've answered diagnostic questions, trigger the Concept Refinement Agent:
+
+```bash
+POST /api/agents/concepts/:conceptNodeId/run
+{
+  "userId": "your-user-id"
+}
+```
+
+The agent will:
+- Bootstrap subconcepts if they don't exist yet
+- Grade your diagnostic answers (even if only partial)
+- Refine the subconcept graph based on your performance
+- Stream all changes via SSE events
+
+<Note>
+You can run refinement even with zero answers. The agent will work with whatever data is available, though it's most effective when you've completed the diagnostic.
+</Note>
+
+## Next Steps
+
+After your diagnostic is graded and your learning path is refined:
+
+1. Review the updated subconcept graph to see what was added or removed
+2. Start tutoring sessions for each subconcept
+3. Track your mastery scores as you progress

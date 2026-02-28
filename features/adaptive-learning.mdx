@@ -1,0 +1,409 @@
+---
+title: 'Adaptive Learning Pathways'
+description: 'Personalized curriculum that responds to your performance'
+icon: 'route'
+---
+
+## Overview
+
+Sprout adapts your learning path in real-time based on diagnostic assessments and ongoing performance. Unlike static courses that force everyone through the same content, Sprout's AI agents observe your strengths and gaps, then restructure the knowledge graph to match your needs.
+
+<Info>
+  Adaptive learning happens at multiple levels: subconcepts, concepts, and entire topic paths can be modified based on your performance.
+</Info>
+
+## Diagnostic Assessment System
+
+### Pre-Concept Diagnostics
+
+Before teaching any concept, Sprout runs a diagnostic assessment to understand your current knowledge:
+
+<CardGroup cols={2}>
+  <Card title="Question Generation" icon="clipboard-question">
+    The Subconcept Bootstrap Agent creates 5-10 diagnostic questions per concept—mixed multiple-choice and open-ended.
+  </Card>
+  
+  <Card title="Difficulty Variation" icon="chart-simple">
+    Questions span easy to challenging to accurately map your understanding across the concept spectrum.
+  </Card>
+  
+  <Card title="Single Pass" icon="forward">
+    Diagnostics are one-time assessments (no repeats) to minimize testing overhead while gathering key insights.
+  </Card>
+  
+  <Card title="Optional Completion" icon="circle-check">
+    You can skip diagnostics entirely, but answering them unlocks powerful personalization.
+  </Card>
+</CardGroup>
+
+### Question Formats
+
+<Tabs>
+  <Tab title="Multiple Choice">
+    **Format**: `mcq`
+    
+    - 4 answer options
+    - Single correct answer
+    - Instant feedback after submission
+    - Stored as `{ selectedOption: string }` in the database
+    
+    ```json
+    {
+      "format": "mcq",
+      "prompt": "What is the time complexity of binary search?",
+      "options": ["O(n)", "O(log n)", "O(n²)", "O(1)"],
+      "correctAnswer": "O(log n)"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Open-Ended">
+    **Format**: `open_ended`
+    
+    - Free-text response
+    - Graded by the Grade Answers Agent (not simple string matching)
+    - Receives score (0.0-1.0) and detailed feedback
+    - Tests deeper understanding vs. recognition
+    
+    ```json
+    {
+      "format": "open_ended",
+      "prompt": "Explain why quicksort has O(n²) worst case.",
+      "correctAnswer": null  // Graded semantically, not literally
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Grading Process
+
+When you submit diagnostic answers, the **Concept Refinement Agent** triggers the **Grade Answers Agent**:
+
+1. **Extract answers**: Latest answer per question
+2. **Call grading sub-agent**: Claude evaluates each response
+3. **Store results**: `isCorrect` (boolean), `score` (0.0-1.0), `feedback` (string)
+4. **Update database**: Graded answers persist for downstream analysis
+
+```typescript
+// From concept-agent.ts
+const graded = await gradeAnswers(conceptNode.title, gradableQuestions);
+
+for (const result of graded) {
+  await db.update(answers)
+    .set({
+      isCorrect: result.isCorrect,
+      score: result.score,
+      feedback: result.feedback,
+    })
+    .where(eq(answers.id, latestAnswer.id));
+}
+```
+
+## Graph Adaptation (ORAV Loop)
+
+After grading, the **Concept Refinement Agent** enters its Observe-Reason-Act-Verify loop:
+
+### 1. Observe Phase
+
+<Tabs>
+  <Tab title="Current Graph">
+    The agent calls `get_current_subconcepts` to view the existing subconcept DAG:
+    
+    ```json
+    {
+      "subconcepts": [
+        { "id": "...", "title": "Binary Search Trees", "prerequisites": [] },
+        { "id": "...", "title": "Tree Traversal", "prerequisites": ["..."] }
+      ]
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Student History">
+    The agent calls `check_student_history` to see cross-concept performance:
+    
+    - Mastery scores for completed subconcepts
+    - Number of completed nodes
+    - Overall difficulty level
+    - Patterns of struggle or ease
+  </Tab>
+  
+  <Tab title="Diagnostic Results">
+    Graded answers reveal:
+    
+    - Which questions you aced (mastered topics)
+    - Which questions you missed (knowledge gaps)
+    - Misconceptions (wrong answers that suggest specific confusion)
+  </Tab>
+</Tabs>
+
+### 2. Reason Phase
+
+Claude analyzes the data to identify:
+
+<CardGroup cols={3}>
+  <Card title="Mastered Content" icon="trophy">
+    Subconcepts you already understand based on diagnostic performance. These can be removed to save time.
+  </Card>
+  
+  <Card title="Knowledge Gaps" icon="circle-exclamation">
+    Missing prerequisites indicated by wrong answers. Requires adding bridge subconcepts.
+  </Card>
+  
+  <Card title="Misconceptions" icon="triangle-exclamation">
+    Specific incorrect beliefs (e.g., confusing pass-by-value vs. pass-by-reference). Needs targeted remediation.
+  </Card>
+</CardGroup>
+
+### 3. Act Phase
+
+The agent has powerful tools to restructure your learning path:
+
+<Tabs>
+  <Tab title="Add Subconcepts">
+    **Tool**: `add_subconcept`
+    
+    Creates new subconcept nodes for:
+    - Bridge topics that fill prerequisite gaps
+    - Remedial content for misconceptions
+    - Enrichment for advanced learners
+    
+    ```typescript
+    {
+      title: "Pass-by-Reference Fundamentals",
+      description: "Clarify memory vs. value semantics",
+      prerequisiteIds: ["variables_concept_id"],
+      insertBefore: "pointers_subconcept_id"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Remove Subconcepts">
+    **Tool**: `remove_subconcept`
+    
+    Deletes mastered subconcepts and automatically reconnects edges:
+    
+    - Finds all incoming edges to the removed node
+    - Finds all outgoing edges
+    - Creates direct connections from prerequisites to dependents
+    - Validates DAG structure (no cycles)
+    
+    <Note>
+      The agent can remove multiple subconcepts in one adaptation cycle.
+    </Note>
+  </Tab>
+  
+  <Tab title="Insert Concepts">
+    **Tool**: `add_prerequisite_concept` / `add_followup_concept`
+    
+    Adds entire concepts to the topic path:
+    
+    - **Prerequisite**: Insert before current concept when gaps are too large
+    - **Follow-up**: Insert after current concept for reinforcement/enrichment
+    
+    This is a major structural change—the topic path itself is reordered.
+  </Tab>
+</Tabs>
+
+### 4. Verify Phase
+
+**Tool**: `validate_graph`
+
+After making changes, the agent calls validation to ensure graph integrity:
+
+- **Orphan detection**: All nodes must be reachable from the root
+- **Broken edges**: Source and target nodes must exist
+- **Cycle detection**: DAG structure must be preserved
+- **BFS traversal**: Confirms every node is in the connected component
+
+If issues are found, the agent fixes them and **verifies again** before completing.
+
+<Info>
+  The double-verify pattern ensures no malformed graphs are ever committed to the database.
+</Info>
+
+## Mastery Tracking
+
+### Subconcept Mastery
+
+As you work through tutoring sessions, the **Tutor Agent** tracks mastery at the subconcept level:
+
+```typescript
+// From tutor-chat.ts
+await db.insert(userNodeProgress).values({
+  userId,
+  nodeId: subconceptNodeId,
+  masteryScore: calculatedScore,  // 0.0 to 1.0
+  completed: masteryScore >= 0.7,
+  updatedAt: new Date(),
+});
+```
+
+**Mastery thresholds**:
+- **0.0 - 0.4**: Struggling (tutor provides more examples)
+- **0.5 - 0.6**: Developing (tutor asks follow-up questions)
+- **0.7 - 1.0**: Mastered (tutor marks complete, unlocks next nodes)
+
+### Exercise Recording
+
+**Tool**: `record_exercise_result`
+
+After each tutoring exercise:
+1. Student's answer is stored
+2. Correctness is evaluated
+3. Mastery score is updated (running average)
+4. Progress record is updated in `userNodeProgress` table
+
+### Prerequisite Checking
+
+**Tool**: `check_prerequisite_mastery`
+
+Before teaching a subconcept, the tutor verifies:
+- All prerequisite subconcepts are marked `completed: true`
+- Mastery scores meet threshold (≥0.7)
+- Edges in the graph match actual readiness
+
+If prerequisites aren't met, the tutor redirects you to complete them first.
+
+## Personalization Examples
+
+### Example 1: Mastered Content Removal
+
+**Scenario**: You ace diagnostic questions about basic loops.
+
+**Adaptation**:
+1. Concept Refinement Agent sees 100% correctness on loop questions
+2. Reasons that "For Loops" and "While Loops" subconcepts are redundant
+3. Removes both subconcepts from the graph
+4. Reconnects edges to "Nested Loops" (next topic)
+5. Validates graph integrity
+6. **Result**: You skip 2 subconcepts and save ~30 minutes
+
+### Example 2: Knowledge Gap Insertion
+
+**Scenario**: You miss questions about variable scope.
+
+**Adaptation**:
+1. Concept Refinement Agent sees 0% correctness on scope questions
+2. Reasons that "Lexical Scoping" is a missing prerequisite
+3. Calls `add_subconcept` to insert "Lexical Scoping Fundamentals"
+4. Wires it as prerequisite to "Closures" subconcept
+5. Validates graph
+6. **Result**: You learn the foundation before tackling advanced topics
+
+### Example 3: Concept-Level Adjustment
+
+**Scenario**: Diagnostic reveals you lack fundamental algebra skills.
+
+**Adaptation**:
+1. Concept Refinement Agent sees widespread struggles across calculus diagnostics
+2. Reasons that entire algebra prerequisite concept is missing
+3. Calls `add_prerequisite_concept` to insert "Algebraic Foundations"
+4. Repositions current concept to depend on new prerequisite
+5. Validates graph
+6. **Result**: A new concept node appears in your topic path
+
+## Continuous Adaptation
+
+Adaptation doesn't stop after diagnostics:
+
+<CardGroup cols={2}>
+  <Card title="Mid-Tutoring Adjustments" icon="comments">
+    If you struggle during tutoring sessions, the Tutor Agent can request on-the-fly graph changes (feature in development).
+  </Card>
+  
+  <Card title="Post-Completion Review" icon="magnifying-glass-chart">
+    After completing a concept, the Review Learning Path Agent suggests enrichment topics or remediation if patterns suggest gaps.
+  </Card>
+  
+  <Card title="Cross-Concept Learning" icon="diagram-project">
+    The system tracks performance across multiple concepts, identifying global strengths and weaknesses.
+  </Card>
+  
+  <Card title="Difficulty Calibration" icon="gauge-high">
+    Exercise difficulty adapts based on recent mastery scores—harder problems appear when you're excelling.
+  </Card>
+</CardGroup>
+
+## Technical Implementation
+
+### Database Schema
+
+Adaptive learning relies on persistent state:
+
+```typescript
+// User progress per node
+userNodeProgress: {
+  userId: string,
+  nodeId: string,
+  masteryScore: number,     // 0.0 to 1.0
+  completed: boolean,
+  exercisesAttempted: number,
+  updatedAt: Date
+}
+
+// Diagnostic answers
+answers: {
+  id: string,
+  userId: string,
+  questionId: string,
+  answerData: JSON,         // { selectedOption } or { text }
+  isCorrect: boolean,
+  score: number,            // 0.0 to 1.0
+  feedback: string,
+  submittedAt: Date
+}
+```
+
+### Agent Communication
+
+Agents share data via tool results:
+
+```typescript
+// Concept Refinement Agent calls Grade Answers Agent
+const graded = await gradeAnswers(conceptTitle, questions);
+
+// Grade Answers Agent returns structured data
+return [
+  {
+    questionId: "...",
+    isCorrect: false,
+    score: 0.3,
+    feedback: "Your answer confused pass-by-value with pass-by-reference..."
+  }
+];
+```
+
+This enables complex multi-agent workflows without tight coupling.
+
+## Benefits of Adaptive Learning
+
+<CardGroup cols={2}>
+  <Card title="Time Efficiency" icon="clock">
+    Skip content you've already mastered. Focus only on knowledge gaps.
+  </Card>
+  
+  <Card title="Reduced Frustration" icon="face-smile">
+    Avoid being thrown into advanced topics without proper prerequisites.
+  </Card>
+  
+  <Card title="Personalized Pacing" icon="gauge">
+    Fast learners progress quickly; those who need more time get additional support.
+  </Card>
+  
+  <Card title="Targeted Remediation" icon="bullseye">
+    Address specific misconceptions instead of reviewing entire topics.
+  </Card>
+  
+  <Card title="Enrichment Opportunities" icon="sparkles">
+    High performers unlock advanced content and enrichment topics.
+  </Card>
+  
+  <Card title="Transparent Logic" icon="book-open">
+    Watch agent reasoning in real-time via SSE events—understand why changes happen.
+  </Card>
+</CardGroup>
+
+<Info>
+  Adaptive learning is the core differentiator that makes Sprout an AI tutor, not just an AI content generator.
+</Info>

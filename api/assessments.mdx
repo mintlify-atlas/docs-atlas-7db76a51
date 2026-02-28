@@ -1,0 +1,323 @@
+---
+title: Assessments
+description: Assessment endpoints for diagnostics, questions, and answers
+---
+
+Assessments contain diagnostic questions used to evaluate student knowledge before personalized learning path generation.
+
+## List Assessments
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/api/assessments?userId=00000000-0000-0000-0000-000000000000&targetNodeId=abc123"
+```
+</CodeGroup>
+
+**GET** `/api/assessments`
+
+List assessments with optional filters.
+
+### Query Parameters
+
+<ParamField query="userId" type="string">
+  Filter by user UUID
+</ParamField>
+
+<ParamField query="targetNodeId" type="string">
+  Filter by target node UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="[]" type="array">
+  <ResponseField name="id" type="string">
+    Assessment UUID
+  </ResponseField>
+  <ResponseField name="userId" type="string">
+    User UUID
+  </ResponseField>
+  <ResponseField name="targetNodeId" type="string">
+    Target node UUID
+  </ResponseField>
+  <ResponseField name="type" type="string">
+    `diagnostic`, `quiz`, or `recall`
+  </ResponseField>
+  <ResponseField name="title" type="string | null">
+    Assessment title
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+  <ResponseField name="completedAt" type="string | null">
+    ISO 8601 timestamp when all questions were answered
+  </ResponseField>
+</ResponseField>
+
+---
+
+## Get Assessment
+
+**GET** `/api/assessments/:id`
+
+Retrieve a single assessment.
+
+---
+
+## Create Assessment
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/assessments \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "targetNodeId": "abc123",
+    "type": "diagnostic",
+    "title": "React Hooks Diagnostic"
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/assessments`
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="targetNodeId" type="string" required>
+  Target node UUID
+</ParamField>
+
+<ParamField body="type" type="string">
+  Assessment type (default: `diagnostic`)
+</ParamField>
+
+<ParamField body="title" type="string">
+  Assessment title
+</ParamField>
+
+---
+
+## Update Assessment
+
+**PATCH** `/api/assessments/:id`
+
+Update assessment metadata (e.g., mark as complete).
+
+### Body Parameters
+
+<ParamField body="completedAt" type="string">
+  ISO 8601 timestamp
+</ParamField>
+
+<ParamField body="title" type="string">
+  New title
+</ParamField>
+
+---
+
+## Questions
+
+### List Questions
+
+**GET** `/api/assessments/:id/questions`
+
+Retrieve all questions for an assessment.
+
+<ResponseField name="[]" type="array">
+  <ResponseField name="id" type="string">
+    Question UUID
+  </ResponseField>
+  <ResponseField name="assessmentId" type="string">
+    Assessment UUID
+  </ResponseField>
+  <ResponseField name="nodeId" type="string | null">
+    Associated node UUID
+  </ResponseField>
+  <ResponseField name="format" type="string">
+    `mcq` or `open_ended`
+  </ResponseField>
+  <ResponseField name="prompt" type="string">
+    Question text
+  </ResponseField>
+  <ResponseField name="options" type="string | null">
+    JSON array of options (for MCQ)
+  </ResponseField>
+  <ResponseField name="correctAnswer" type="string | null">
+    Correct answer (for MCQ)
+  </ResponseField>
+  <ResponseField name="gradingRubric" type="string | null">
+    JSON grading rubric (for open-ended)
+  </ResponseField>
+  <ResponseField name="difficulty" type="number">
+    Difficulty level (1-5)
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+### Create Question
+
+<CodeGroup>
+```bash cURL - MCQ
+curl -X POST http://localhost:8000/api/assessments/abc123/questions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "format": "mcq",
+    "prompt": "What does useState return?",
+    "options": ["An array", "An object", "A function", "A string"],
+    "correctAnswer": "An array",
+    "difficulty": 2
+  }'
+```
+
+```bash cURL - Open-Ended
+curl -X POST http://localhost:8000/api/assessments/abc123/questions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "format": "open_ended",
+    "prompt": "Explain the useEffect cleanup function.",
+    "difficulty": 3
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/assessments/:id/questions`
+
+### Body Parameters
+
+<ParamField body="format" type="string" required>
+  `mcq` or `open_ended`
+</ParamField>
+
+<ParamField body="prompt" type="string" required>
+  Question text
+</ParamField>
+
+<ParamField body="nodeId" type="string">
+  Associated node UUID
+</ParamField>
+
+<ParamField body="options" type="array">
+  Array of answer options (for MCQ)
+</ParamField>
+
+<ParamField body="correctAnswer" type="string">
+  Correct answer (for MCQ)
+</ParamField>
+
+<ParamField body="gradingRubric" type="object">
+  Grading rubric (for open-ended)
+</ParamField>
+
+<ParamField body="difficulty" type="number">
+  Difficulty level 1-5 (default: 1)
+</ParamField>
+
+---
+
+## Answers
+
+### Submit Answer
+
+<CodeGroup>
+```bash cURL - MCQ Answer
+curl -X POST http://localhost:8000/api/assessments/abc123/answers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "questionId": "q123",
+    "selectedOption": "An array",
+    "isCorrect": true,
+    "score": 1
+  }'
+```
+
+```bash cURL - Open-Ended Answer
+curl -X POST http://localhost:8000/api/assessments/abc123/answers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "questionId": "q456",
+    "answerText": "The cleanup function runs before re-running the effect and when unmounting...",
+    "score": 0.85,
+    "feedback": "Good explanation! Consider mentioning dependency arrays."
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/assessments/:assessmentId/answers`
+
+Submit an answer to a question. Auto-completes the assessment when all questions are answered.
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="questionId" type="string" required>
+  Question UUID
+</ParamField>
+
+<ParamField body="answerText" type="string">
+  Free-text answer (for open-ended)
+</ParamField>
+
+<ParamField body="selectedOption" type="string">
+  Selected option (for MCQ)
+</ParamField>
+
+<ParamField body="isCorrect" type="boolean">
+  Whether the answer is correct
+</ParamField>
+
+<ParamField body="score" type="number">
+  Score (0-1 or 0-100, normalized to 0-1)
+</ParamField>
+
+<ParamField body="feedback" type="string">
+  Feedback text
+</ParamField>
+
+### Get Answers
+
+**GET** `/api/assessments/:assessmentId/answers?userId=USER_ID`
+
+Retrieve all answers for an assessment and user.
+
+<ResponseField name="[]" type="array">
+  <ResponseField name="id" type="string">
+    Answer UUID
+  </ResponseField>
+  <ResponseField name="userId" type="string">
+    User UUID
+  </ResponseField>
+  <ResponseField name="assessmentId" type="string">
+    Assessment UUID
+  </ResponseField>
+  <ResponseField name="questionId" type="string">
+    Question UUID
+  </ResponseField>
+  <ResponseField name="answerText" type="string | null">
+    Free-text answer
+  </ResponseField>
+  <ResponseField name="selectedOption" type="string | null">
+    Selected option (MCQ)
+  </ResponseField>
+  <ResponseField name="isCorrect" type="boolean | null">
+    Correctness
+  </ResponseField>
+  <ResponseField name="score" type="number | null">
+    Score (0-1)
+  </ResponseField>
+  <ResponseField name="feedback" type="string | null">
+    Feedback text
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>

@@ -1,0 +1,313 @@
+---
+title: Agents
+description: AI agent endpoints for generating learning paths (SSE streaming)
+---
+
+Agent endpoints use **Server-Sent Events (SSE)** to stream real-time updates as AI agents generate personalized learning content.
+
+## Topic Agent
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/agents/topics/abc123/run \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "small": false
+  }'
+```
+
+```javascript Fetch
+const eventSource = fetch('http://localhost:8000/api/agents/topics/abc123/run', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    userId: '00000000-0000-0000-0000-000000000000',
+    small: false
+  })
+});
+
+const reader = eventSource.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  const chunk = decoder.decode(value);
+  console.log(chunk);
+}
+```
+</CodeGroup>
+
+**POST** `/api/agents/topics/:topicNodeId/run`
+
+Generate a complete learning path for a topic:
+1. **Topic Agent** creates a sequence of concepts
+2. **Subconcept Bootstrap Agents** (parallel) create subconcepts + diagnostic questions for each concept
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="small" type="boolean">
+  Generate a smaller learning path for testing (1-2 concepts, 2-3 subconcepts each). Default: `false`
+</ParamField>
+
+### SSE Events
+
+<ResponseField name="agent_start" type="event">
+  Agent has started
+  ```json
+  { "agent": "topic" }
+  ```
+</ResponseField>
+
+<ResponseField name="agent_reasoning" type="event">
+  Claude's reasoning between tool calls
+  ```json
+  { "agent": "topic", "text": "I'll design a learning path with 6 concepts..." }
+  ```
+</ResponseField>
+
+<ResponseField name="tool_call" type="event">
+  Tool invocation
+  ```json
+  { "tool": "save_concept", "input": { "title": "Variables", "desc": "..." } }
+  ```
+</ResponseField>
+
+<ResponseField name="tool_result" type="event">
+  Tool result (truncated to 200 chars)
+  ```json
+  { "tool": "save_concept", "summary": "Created concept node id=abc123" }
+  ```
+</ResponseField>
+
+<ResponseField name="node_created" type="event">
+  New node persisted to DB
+  ```json
+  { "node": { "id": "abc123", "title": "Variables", "type": "concept" } }
+  ```
+</ResponseField>
+
+<ResponseField name="edge_created" type="event">
+  New edge persisted to DB
+  ```json
+  { "edge": { "source": "Variables", "target": "Functions" } }
+  ```
+</ResponseField>
+
+<ResponseField name="agent_done" type="event">
+  Agent completed successfully
+  ```json
+  { "agent": "topic", "conceptCount": 6, "rationale": "..." }
+  ```
+</ResponseField>
+
+<ResponseField name="agent_error" type="event">
+  Agent failed
+  ```json
+  { "agent": "topic", "message": "Rate limit exceeded" }
+  ```
+</ResponseField>
+
+---
+
+## Concept Diagnostic
+
+**GET** `/api/agents/concepts/:conceptNodeId/diagnostic?userId=USER_ID`
+
+Retrieve the diagnostic assessment for a concept (optional survey before refinement).
+
+### Response
+
+<ResponseField name="agent" type="string">
+  `"concept"`
+</ResponseField>
+<ResponseField name="status" type="string">
+  `"diagnostic_ready"`
+</ResponseField>
+<ResponseField name="conceptNodeId" type="string">
+  Concept node UUID
+</ResponseField>
+<ResponseField name="assessment" type="object">
+  Assessment object
+</ResponseField>
+<ResponseField name="questions" type="array">
+  Array of question objects
+</ResponseField>
+<ResponseField name="answeredCount" type="number">
+  Number of answered questions
+</ResponseField>
+<ResponseField name="requiredAnswers" type="number">
+  Total questions
+</ResponseField>
+<ResponseField name="isComplete" type="boolean">
+  Whether all questions are answered
+</ResponseField>
+
+---
+
+## Concept Refinement Agent
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/agents/concepts/abc123/run \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000"
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/agents/concepts/:conceptNodeId/run`
+
+Personalize the subconcept graph based on diagnostic answers.
+
+**Flow:**
+1. Bootstrap subconcepts if missing
+2. **GRADE** diagnostic answers
+3. **OBSERVE** current subconcepts + student history
+4. **REASON** about gaps and mastery
+5. **ACT** - add/remove subconcepts, insert prerequisite/follow-up concepts
+6. **VERIFY** graph integrity
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+### SSE Events
+
+<ResponseField name="diagnostic_status" type="event">
+  Diagnostic status summary
+  ```json
+  {
+    "conceptNodeId": "abc123",
+    "assessment": { ... },
+    "answeredCount": 3,
+    "requiredAnswers": 5
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="agent_reasoning" type="event">
+  Agent's reasoning steps
+  ```json
+  {
+    "agent": "concept_refinement",
+    "text": "Student struggled with closures (score 0.4). I'll add a bridge subconcept..."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="node_created" type="event">
+  New subconcept added
+</ResponseField>
+
+<ResponseField name="node_removed" type="event">
+  Subconcept removed
+  ```json
+  { "nodeId": "xyz789" }
+  ```
+</ResponseField>
+
+<ResponseField name="edge_created" type="event">
+  Dependency edge created
+</ResponseField>
+
+<ResponseField name="edge_removed" type="event">
+  Dependency edge removed
+  ```json
+  { "sourceNodeId": "abc", "targetNodeId": "def" }
+  ```
+</ResponseField>
+
+---
+
+## Path Review Agent
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/agents/nodes/abc123/review \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "overview": "Student completed this concept quickly",
+    "maxAdditions": 3
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/agents/nodes/:nodeId/review`
+
+Post-completion review - decide if enrichment nodes should be added to the learning path.
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="overview" type="string">
+  Optional context about the student's performance
+</ParamField>
+
+<ParamField body="maxAdditions" type="number">
+  Maximum number of nodes to add (default varies by agent)
+</ParamField>
+
+### Response
+
+<ResponseField name="agent" type="string">
+  `"path_review"`
+</ResponseField>
+<ResponseField name="status" type="string">
+  `"no_change"` or `"updated"`
+</ResponseField>
+<ResponseField name="nodeId" type="string">
+  Reviewed node UUID
+</ResponseField>
+<ResponseField name="level" type="string">
+  `"concept"` or `"subconcept"`
+</ResponseField>
+<ResponseField name="decision" type="object">
+  Agent's decision object (includes `should_add`, `notes`, additions)
+</ResponseField>
+<ResponseField name="insertedNodes" type="array">
+  Array of newly created nodes
+</ResponseField>
+<ResponseField name="createdEdges" type="array">
+  Array of newly created edges
+</ResponseField>
+
+---
+
+## Agent Tools
+
+Agents use structured tools to observe, reason, act, and verify:
+
+### Topic Agent Tools
+- `extract_all_concept_contexts` - Batch-extract document sections for concepts
+- `save_concept` - Create concept node
+- `save_concept_edge` - Create dependency edge
+
+### Subconcept Bootstrap Tools
+- `save_diagnostic_question` - Create diagnostic question (MCQ or open-ended)
+- `save_subconcept` - Create subconcept node
+- `save_subconcept_edge` - Create dependency edge
+
+### Concept Refinement Tools
+- `grade_student_answers` - Grade diagnostic answers via sub-agent
+- `get_current_subconcepts` - View subconcept graph
+- `check_student_history` - Cross-concept performance
+- `add_subconcept` - Add bridge/remedial subconcept
+- `remove_subconcept` - Remove mastered subconcept
+- `add_prerequisite_concept` - Insert concept before current
+- `add_followup_concept` - Insert concept after current
+- `validate_graph` - Check for orphans/cycles via BFS

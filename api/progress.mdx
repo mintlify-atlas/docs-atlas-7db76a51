@@ -1,0 +1,250 @@
+---
+title: Progress
+description: Progress tracking endpoints for monitoring student mastery
+---
+
+Progress endpoints track student performance and mastery for each node in the learning graph.
+
+## Get Progress
+
+<CodeGroup>
+```bash cURL - User Progress
+curl "http://localhost:8000/api/progress?userId=00000000-0000-0000-0000-000000000000"
+```
+
+```bash cURL - Node Progress
+curl "http://localhost:8000/api/progress?userId=00000000-0000-0000-0000-000000000000&nodeId=abc123"
+```
+</CodeGroup>
+
+**GET** `/api/progress`
+
+Retrieve progress records for a user, optionally filtered by node.
+
+### Query Parameters
+
+<ParamField query="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField query="nodeId" type="string">
+  Filter by specific node UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="[]" type="array">
+  Array of progress records
+  <ResponseField name="id" type="string">
+    Progress record UUID
+  </ResponseField>
+  <ResponseField name="userId" type="string">
+    User UUID
+  </ResponseField>
+  <ResponseField name="nodeId" type="string">
+    Node UUID
+  </ResponseField>
+  <ResponseField name="firstEnteredAt" type="string | null">
+    ISO 8601 timestamp of first entry
+  </ResponseField>
+  <ResponseField name="lastEnteredAt" type="string | null">
+    ISO 8601 timestamp of most recent entry
+  </ResponseField>
+  <ResponseField name="completedAt" type="string | null">
+    ISO 8601 timestamp when node was completed
+  </ResponseField>
+  <ResponseField name="masteryScore" type="number">
+    Mastery level (0-1, default 0)
+  </ResponseField>
+  <ResponseField name="attemptsCount" type="number">
+    Number of learning attempts
+  </ResponseField>
+  <ResponseField name="hasGeneratedSubnodes" type="boolean">
+    Whether subconcepts have been generated for this node
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+  <ResponseField name="updatedAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+---
+
+## Record Entry
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/progress \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "nodeId": "abc123"
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/progress`
+
+Record a student entering a node. Creates a new progress record or updates an existing one.
+
+### Behavior
+
+- **First entry:** Creates a new record with `firstEnteredAt`, `lastEnteredAt`, and `attemptsCount = 1`
+- **Subsequent entries:** Updates `lastEnteredAt` and increments `attemptsCount`
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="nodeId" type="string" required>
+  Node UUID
+</ParamField>
+
+### Response
+
+**Status:** `201 Created` (new record) or `200 OK` (updated record)
+
+Returns the progress record.
+
+---
+
+## Update Progress
+
+<CodeGroup>
+```bash cURL - Mark Complete
+curl -X PATCH http://localhost:8000/api/progress/progress123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "completedAt": "2024-01-15T10:30:00.000Z",
+    "masteryScore": 0.85
+  }'
+```
+
+```bash cURL - Update Mastery
+curl -X PATCH http://localhost:8000/api/progress/progress123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "masteryScore": 0.92
+  }'
+```
+
+```bash cURL - Mark Subconcepts Generated
+curl -X PATCH http://localhost:8000/api/progress/progress123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "hasGeneratedSubnodes": true
+  }'
+```
+</CodeGroup>
+
+**PATCH** `/api/progress/:id`
+
+Update progress record fields.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  Progress record UUID
+</ParamField>
+
+### Body Parameters
+
+<ParamField body="masteryScore" type="number">
+  New mastery score (0-1)
+</ParamField>
+
+<ParamField body="completedAt" type="string">
+  ISO 8601 timestamp when node was completed
+</ParamField>
+
+<ParamField body="hasGeneratedSubnodes" type="boolean">
+  Whether subconcepts have been generated
+</ParamField>
+
+### Response
+
+Returns the updated progress record with a new `updatedAt` timestamp.
+
+---
+
+## Mastery Score
+
+The `masteryScore` field (0-1) represents how well the student has mastered a node:
+
+- **0.0-0.3:** Struggling - needs remediation
+- **0.3-0.7:** Developing - needs practice
+- **0.7-0.9:** Proficient - on track
+- **0.9-1.0:** Mastered - ready to move on
+
+Mastery scores are updated by:
+- The **tutor agent** (`record_exercise_result` tool)
+- The **concept refinement agent** (based on diagnostic results)
+- Manual updates via this API
+
+---
+
+## Progress Tracking Flow
+
+```
+1. Student enters a concept node
+   → POST /api/progress { userId, nodeId }
+   → Creates/updates progress record
+
+2. Student takes diagnostic assessment
+   → POST /api/assessments/:id/answers { ... }
+   → Concept refinement agent analyzes performance
+
+3. Student learns subconcepts via tutor
+   → POST /api/chat/sessions/:id/tutor { ... }
+   → Tutor calls record_exercise_result tool
+   → PATCH /api/progress/:id { masteryScore }
+
+4. Student completes all subconcepts
+   → PATCH /api/progress/:id { completedAt, masteryScore }
+   → Node marked complete
+```
+
+---
+
+## Example: Monitoring Student Progress
+
+```bash
+# Get all progress for a user
+curl "http://localhost:8000/api/progress?userId=00000000-0000-0000-0000-000000000000"
+```
+
+Response:
+```json
+[
+  {
+    "id": "prog1",
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "nodeId": "concept1",
+    "firstEnteredAt": "2024-01-10T09:00:00.000Z",
+    "lastEnteredAt": "2024-01-15T10:30:00.000Z",
+    "completedAt": "2024-01-15T10:30:00.000Z",
+    "masteryScore": 0.85,
+    "attemptsCount": 3,
+    "hasGeneratedSubnodes": true,
+    "createdAt": "2024-01-10T09:00:00.000Z",
+    "updatedAt": "2024-01-15T10:30:00.000Z"
+  },
+  {
+    "id": "prog2",
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "nodeId": "concept2",
+    "firstEnteredAt": "2024-01-15T11:00:00.000Z",
+    "lastEnteredAt": "2024-01-15T11:00:00.000Z",
+    "completedAt": null,
+    "masteryScore": 0.4,
+    "attemptsCount": 1,
+    "hasGeneratedSubnodes": false,
+    "createdAt": "2024-01-15T11:00:00.000Z",
+    "updatedAt": "2024-01-15T11:00:00.000Z"
+  }
+]
+```

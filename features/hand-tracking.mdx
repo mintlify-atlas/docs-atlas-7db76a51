@@ -1,0 +1,445 @@
+---
+title: 'Hand Tracking Navigation'
+description: 'OpenCV-powered gesture control for 3D graph interaction'
+icon: 'hand'
+---
+
+## Overview
+
+Sprout features experimental hand tracking that lets you navigate the 3D knowledge graph using natural hand gestures. Powered by OpenCV and MediaPipe, the system tracks up to 2 hands simultaneously and translates finger positions into camera control and node manipulation.
+
+<Info>
+  Hand tracking runs as a separate Python WebSocket server (port 8765) that streams landmark data at 60 FPS to the React frontend.
+</Info>
+
+## Architecture
+
+### Backend: Python WebSocket Server
+
+**File**: `sprout-backend/backend.py`
+
+<CardGroup cols={2}>
+  <Card title="OpenCV Capture" icon="video">
+    Captures webcam feed at native resolution, flipped horizontally for mirror effect.
+  </Card>
+  
+  <Card title="MediaPipe Hands" icon="brain">
+    Detects hand landmarks with `model_complexity=0` (fastest model) for minimal latency.
+  </Card>
+  
+  <Card title="WebSocket Streaming" icon="satellite-dish">
+    Streams hand data at 60 FPS via WebSocket (rate-limited to prevent queue buildup).
+  </Card>
+  
+  <Card title="Multi-Hand Support" icon="hands">
+    Tracks up to 2 hands simultaneously with independent smoothing and gesture detection.
+  </Card>
+</CardGroup>
+
+### Frontend: React Hook
+
+**File**: `sprout-frontend/src/hooks/use-hand-tracking.ts`
+
+```typescript
+const { handPos, hands, connected } = useHandTracking(
+  "ws://localhost:8765",
+  enabled
+);
+```
+
+- **Auto-reconnect**: Retries connection every 3 seconds on disconnect
+- **State parsing**: Converts WebSocket JSON to typed `HandSample[]`
+- **Camera hand selection**: First non-grabbing hand controls camera orbit
+
+## Hand Landmark Detection
+
+MediaPipe detects 21 landmarks per hand:
+
+<Tabs>
+  <Tab title="Key Landmarks">
+    | Index | Landmark | Purpose |
+    |-------|----------|----------|
+    | 0 | Wrist | Base reference point |
+    | 4 | Thumb tip | Pinch gesture detection |
+    | 8 | Index tip | Primary cursor position |
+    | 5, 9, 13, 17 | Finger MCPs | Palm center calculation |
+    | 6, 10, 14, 18 | Finger PIPs | Open palm detection |
+  </Tab>
+  
+  <Tab title="Coordinate System">
+    MediaPipe returns normalized coordinates:
+    
+    - **x, y**: 0.0 to 1.0 (screen percentage)
+    - **z**: Relative depth from camera plane (negative = closer)
+    
+    ```python
+    tip = hand_landmarks.landmark[8]  # Index fingertip
+    # tip.x, tip.y, tip.z are normalized [0, 1]
+    ```
+  </Tab>
+</Tabs>
+
+## Gesture Recognition
+
+### Open Palm Detection
+
+**Algorithm**: All 4 fingers (index, middle, ring, pinky) must be extended.
+
+```python
+def is_open_palm(landmarks):
+    wrist = landmarks[0]
+    for tip_idx, pip_idx in [(8,6), (12,10), (16,14), (20,18)]:
+        tip = landmarks[tip_idx]
+        pip = landmarks[pip_idx]
+        
+        # Extended if tip is farther from wrist than PIP
+        extended_by_dist = dist(tip, wrist) > dist(pip, wrist) * 1.08
+        # OR tip is above PIP (y decreases upward in image coords)
+        extended_by_y = tip.y < pip.y
+        
+        if not (extended_by_dist or extended_by_y):
+            return False  # This finger is curled
+    return True  # All fingers extended
+```
+
+<Note>
+  The 1.08 multiplier provides tolerance for slight finger bending—prevents false negatives.
+</Note>
+
+### Pinch Gesture
+
+**Measurement**: Euclidean distance between thumb tip (4) and index tip (8).
+
+```python
+thumb = landmarks[4]
+tip = landmarks[8]
+pinch = math.hypot(thumb.x - tip.x, thumb.y - tip.y)
+```
+
+**Interpretation**:
+- **pinch < 0.05**: Pinched (zoom in)
+- **pinch > 0.20**: Spread (zoom out)
+- Maps to camera radius: [0.02, 0.35] → [80px, 550px]
+
+### Grab Mode (3-Second Hold)
+
+Holding an open palm for 3 seconds activates **grab mode** for node manipulation:
+
+```python
+class HandState:
+    def update(self, landmarks, open_palm, now):
+        if open_palm:
+            if self.palm_start_time is None:
+                self.palm_start_time = now
+            hold_duration = now - self.palm_start_time
+            if hold_duration >= PALM_HOLD_SECONDS:
+                self.is_grabbing = True  # Grab mode active!
+        else:
+            self.palm_start_time = None
+            self.is_grabbing = False
+```
+
+**Visual feedback**: A progress ring appears at palm center, filling clockwise over 3 seconds.
+
+## Navigation Modes
+
+### Mode 1: Camera Orbit (Default)
+
+When **not grabbing**, your hand controls the camera:
+
+<Tabs>
+  <Tab title="Pan">
+    **Hand X** (left-right) → Camera orbits around the graph center (theta angle)
+    
+    ```typescript
+    const theta = (smoothHand.x - 0.5) * 2 * Math.PI;
+    // x=0.5 → theta=0 (front), x=0 → -π (left), x=1 → +π (right)
+    ```
+  </Tab>
+  
+  <Tab title="Tilt">
+    **Hand Y** (up-down) → Camera elevation angle (phi)
+    
+    ```typescript
+    const phi = (0.5 - smoothHand.y) * (Math.PI / 3);
+    // y=0.5 → phi=0 (horizon), y=0 → +π/3 (top view)
+    ```
+  </Tab>
+  
+  <Tab title="Zoom">
+    **Pinch distance** → Camera radius from center
+    
+    ```typescript
+    const targetR = 80 + ((clampedPinch - 0.02) / 0.33) * 470;
+    // Pinch close → radius=80 (zoomed in)
+    // Pinch far → radius=550 (zoomed out)
+    ```
+  </Tab>
+</Tabs>
+
+**Smoothing**: Camera position is lerped at 6% per frame (60 FPS) for fluid motion:
+
+```typescript
+smoothHand.x += (target.x - smoothHand.x) * 0.06;
+smoothHand.y += (target.y - smoothHand.y) * 0.06;
+smoothR += (targetR - smoothR) * 0.05;
+```
+
+### Mode 2: Node Grabbing
+
+When **is_grabbing = true**, your palm position controls node position:
+
+<Tabs>
+  <Tab title="Capture">
+    **Trigger**: Open palm held for 3 seconds near a node (within 140px radius)
+    
+    **Node selection**:
+    1. Projects all main nodes (root/concept) to screen space
+    2. Finds nearest node to palm position
+    3. Captures that node + all its subconcepts (if concept node)
+    
+    <Note>
+      Only root and concept nodes can be grabbed—subconcepts move with their parent.
+    </Note>
+  </Tab>
+  
+  <Tab title="Drag">
+    **Palm delta** → Node world position offset
+    
+    ```typescript
+    const dxNorm = palm.x - initialPalm.x;  // Normalized delta
+    const dxWorld = dxNorm * 800;           // Scale to world units
+    
+    node.fx = initialPos.x + dxWorld;  // Fixed position
+    node.fy = initialPos.y - dyWorld;  // Y inverted
+    node.fz = initialPos.z + dzWorld * -1.2;  // Z scaled
+    ```
+    
+    **Smoothing**: Drag offset is lerped at 6% per frame to reduce jitter.
+  </Tab>
+  
+  <Tab title="Release">
+    **Trigger**: Hand closes (no longer open palm)
+    
+    **Effect**: Nodes freeze in place—`fx/fy/fz` remain set, preventing drift.
+  </Tab>
+</Tabs>
+
+### Grab Exclusivity
+
+Only **one hand at a time** can grab:
+
+```typescript
+if (grabState.active) {
+  // Only acknowledge the grabbing hand
+  grabHand = hands.find(h => 
+    h.is_grabbing && h.handedness === grabState.handedness
+  );
+} else {
+  // First grabbing hand wins
+  grabHand = hands.find(h => h.is_grabbing);
+}
+```
+
+<Info>
+  If both hands are grabbing, the second hand is ignored. This prevents conflicting drag operations.
+</Info>
+
+## Visual Feedback
+
+### Palm Progress Ring
+
+When an open palm is detected, an SVG ring renders at palm position:
+
+```tsx
+<svg style={{ left: `${palm_x * 100}%`, top: `${palm_y * 100}%` }}>
+  {/* Track ring (faint) */}
+  <circle r={22} stroke="rgba(255,255,255,0.12)" strokeWidth={3} />
+  
+  {/* Progress arc (fills clockwise from 12 o'clock) */}
+  <circle
+    r={22}
+    stroke={is_grabbing ? "#4ade80" : "#facc15"}  // Green when grabbed
+    strokeDasharray={circ}
+    strokeDashoffset={circ * (1 - progress)}  // 0 to 1 over 3 seconds
+    transform="rotate(-90)"
+  />
+</svg>
+```
+
+**Color states**:
+- **Yellow** (`#facc15`): Charging (0-3 seconds)
+- **Green** (`#4ade80`): Grabbing (3+ seconds)
+
+### Hand Cursor (Optional)
+
+A custom cursor follows the index fingertip when not grabbing:
+
+**File**: `sprout-frontend/src/components/hand-cursor.tsx`
+
+```tsx
+<div
+  className="pointer-events-none fixed z-50"
+  style={{
+    left: `${handPos.x * 100}%`,
+    top: `${handPos.y * 100}%`,
+    transform: 'translate(-50%, -50%)'
+  }}
+>
+  <div className="h-4 w-4 rounded-full bg-green-400/60" />
+</div>
+```
+
+## Performance Optimizations
+
+### Backend
+
+<CardGroup cols={2}>
+  <Card title="Model Complexity 0" icon="gauge-simple">
+    Lightest MediaPipe model (fewer landmarks, faster inference) for under 16ms frame time.
+  </Card>
+  
+  <Card title="60 FPS Rate Limit" icon="stopwatch">
+    WebSocket sends capped at 16.67ms intervals to prevent queue buildup.
+  </Card>
+  
+  <Card title="EMA Smoothing" icon="wave-sine">
+    Alpha = 0.35 balances responsiveness vs. jitter reduction.
+  </Card>
+  
+  <Card title="Per-Connection State" icon="users">
+    Each WebSocket client has isolated `HandState` instances—no shared buffers.
+  </Card>
+</CardGroup>
+
+### Frontend
+
+<CardGroup cols={2}>
+  <Card title="requestAnimationFrame" icon="film">
+    Camera updates run in rAF loop (60 FPS) independent of WebSocket rate.
+  </Card>
+  
+  <Card title="Ref-Based State" icon="box">
+    Hot path reads refs (not state) to avoid triggering re-renders.
+  </Card>
+  
+  <Card title="Screen-Space Projection" icon="cube">
+    Node grabbing uses `graph2ScreenCoords()` for accurate hit detection (camera-aware).
+  </Card>
+  
+  <Card title="Smooth Offset Lerp" icon="bezier-curve">
+    Drag offset smoothed at 6% per frame to eliminate microjitter.
+  </Card>
+</CardGroup>
+
+## Setup Instructions
+
+### 1. Install Python Dependencies
+
+```bash
+cd sprout-backend
+pip install opencv-python mediapipe websockets
+```
+
+### 2. Start Hand Tracking Server
+
+```bash
+python backend.py
+# WebSocket Server started on ws://localhost:8765
+```
+
+### 3. Enable Hand Tracking in UI
+
+Toggle the hand tracking button in the graph view. The frontend will connect to `ws://localhost:8765` and display connection status.
+
+### 4. Webcam Permissions
+
+Ensure your browser/OS grants webcam access to the Python process. On macOS, you may need to allow Terminal in System Preferences > Privacy > Camera.
+
+## Limitations and Future Work
+
+<CardGroup cols={2}>
+  <Card title="Single Client" icon="user">
+    Each Python server instance supports one WebSocket client. Multiple users need separate server instances.
+  </Card>
+  
+  <Card title="Lighting Sensitivity" icon="lightbulb">
+    MediaPipe performance degrades in low light. Requires well-lit environment for reliable tracking.
+  </Card>
+  
+  <Card title="Handedness Consistency" icon="hand-back-fist">
+    If hands swap sides rapidly, handedness labels may flicker (MediaPipe limitation).
+  </Card>
+  
+  <Card title="CPU Intensive" icon="microchip">
+    Video processing is CPU-bound. On low-end machines, consider increasing `SEND_INTERVAL` to reduce load.
+  </Card>
+</CardGroup>
+
+**Planned enhancements**:
+- GPU acceleration via CUDA or Metal
+- Gesture vocabulary expansion (fist, thumbs-up, etc.)
+- Multi-user collaboration with hand ID tracking
+- Haptic feedback via browser Vibration API
+
+## Technical Details
+
+### Palm Center Calculation
+
+The palm center is the average of 5 landmarks (more stable than wrist alone):
+
+```python
+def palm_center(landmarks):
+    pts = [0, 5, 9, 13, 17]  # Wrist + 4 finger MCPs
+    x = sum(landmarks[i].x for i in pts) / 5
+    y = sum(landmarks[i].y for i in pts) / 5
+    z = sum(landmarks[i].z for i in pts) / 5
+    return x, y, z
+```
+
+This avoids jitter from wrist rotation while staying anchored to hand center.
+
+### WebSocket Protocol
+
+**Message format**:
+
+```json
+{
+  "hands": [
+    {
+      "x": 0.52,              // Index tip X (0-1)
+      "y": 0.48,              // Index tip Y (0-1)
+      "z": -0.03,             // Index tip depth
+      "pinch": 0.12,          // Thumb-index distance
+      "palm_x": 0.50,         // Palm center X
+      "palm_y": 0.45,         // Palm center Y
+      "palm_z": -0.02,        // Palm center depth
+      "is_open_palm": true,   // Gesture flag
+      "palm_hold_duration": 1.5,  // Seconds held
+      "is_grabbing": false,   // Grab mode active
+      "hand": 0,              // Hand index (0 or 1)
+      "handedness": "Right"   // Left or Right
+    }
+  ]
+}
+```
+
+### Force Graph Integration
+
+**File**: `sprout-frontend/src/components/force-graph-view.tsx`
+
+The hand tracking hook passes data to the force graph component:
+
+```typescript
+<ForceGraphView
+  handPos={handPos}  // Current camera hand
+  hands={hands}      // All detected hands (for grab detection)
+  // ...
+/>
+```
+
+The rAF loop inside ForceGraphView reads these props via refs and updates the camera + node positions every frame.
+
+<Info>
+  Hand tracking is entirely optional—all graph features work perfectly with mouse/trackpad. It's an experimental enhancement for immersive exploration.
+</Info>

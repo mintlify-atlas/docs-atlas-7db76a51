@@ -1,0 +1,468 @@
+---
+title: Database Migrations
+description: Managing database schema with Drizzle ORM
+---
+
+Sprout uses [Drizzle ORM](https://orm.drizzle.team/) with SQLite for data persistence. All schema definitions live in TypeScript, and migrations are automatically generated.
+
+## Overview
+
+Drizzle provides a type-safe way to define database schemas and generates SQL migration files automatically.
+
+**Key Files**:
+- `src/db/schema.ts` - Schema definitions (source of truth)
+- `drizzle.config.ts` - Drizzle configuration
+- `src/db/migrate.ts` - Migration runner
+- `drizzle/` - Generated migration SQL files
+- `sprout.db` - SQLite database file (created after first migration)
+
+## Initial Setup
+
+After installing dependencies, initialize the database:
+
+<Steps>
+  <Step title="Ensure Configuration">
+    Verify `drizzle.config.ts` exists:
+    
+    ```typescript drizzle.config.ts
+    import { defineConfig } from "drizzle-kit";
+    
+    export default defineConfig({
+      schema: "./src/db/schema.ts",
+      out: "./drizzle",
+      dialect: "sqlite",
+      dbCredentials: {
+        url: "./sprout.db",
+      },
+    });
+    ```
+  </Step>
+  
+  <Step title="Run Migrations">
+    Apply the database schema:
+    
+    ```bash
+    cd sprout-backend
+    npm run db:migrate
+    ```
+    
+    Expected output:
+    ```
+    Running migrations...
+    Migrations complete.
+    ```
+    
+    This creates `sprout.db` in the backend directory.
+  </Step>
+  
+  <Step title="Verify Database">
+    Check that the database was created:
+    
+    ```bash
+    ls -lh sprout.db
+    # Should show the database file
+    ```
+  </Step>
+</Steps>
+
+<Info>
+  The default user is automatically seeded when you start the backend with `npm run dev`.
+</Info>
+
+## Database Schema
+
+The schema is defined in `src/db/schema.ts` using Drizzle's SQLite dialect.
+
+### Core Tables
+
+<Tabs>
+  <Tab title="users">
+    Single-user application with a default user auto-seeded on startup.
+    
+    ```typescript
+    export const users = sqliteTable("users", {
+      id: text("id").primaryKey(),
+      email: text("email").notNull().unique(),
+      title: text("title"),
+      desc: text("desc"),
+      updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
+      createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+    });
+    ```
+  </Tab>
+  
+  <Tab title="branches">
+    Topics created by users (e.g., "Linear Algebra", "Fauna of Peru").
+    
+    ```typescript
+    export const branches = sqliteTable("branches", {
+      id: text("id").primaryKey(),
+      title: text("title").notNull(),
+      userId: text("user_id").notNull().references(() => users.id),
+      createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+      updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
+    });
+    ```
+  </Tab>
+  
+  <Tab title="nodes">
+    Learning graph nodes: `root`, `concept`, or `subconcept`.
+    
+    ```typescript
+    export const nodes = sqliteTable("nodes", {
+      id: text("id").primaryKey(),
+      userId: text("user_id").notNull().references(() => users.id),
+      type: text("type", { enum: ["root", "concept", "subconcept"] }).notNull(),
+      branchId: text("branch_id").references(() => branches.id),
+      parentId: text("parent_id").references(() => nodes.id),
+      title: text("title").notNull(),
+      desc: text("desc"),
+      accuracyScore: real("accuracy_score").notNull().default(0),
+      createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+      updatedAt: text("updated_at").notNull().default(sql`(datetime('now'))`),
+    });
+    ```
+  </Tab>
+  
+  <Tab title="node_edges">
+    Prerequisite relationships between nodes (forms a DAG).
+    
+    ```typescript
+    export const nodeEdges = sqliteTable("node_edges", {
+      id: text("id").primaryKey(),
+      sourceNodeId: text("source_node_id").notNull().references(() => nodes.id),
+      targetNodeId: text("target_node_id").notNull().references(() => nodes.id),
+      createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+    });
+    ```
+  </Tab>
+</Tabs>
+
+### Additional Tables
+
+| Table | Purpose |
+|-------|----------|
+| `topic_documents` | S3-stored documents uploaded for topics |
+| `node_contents` | Explanations, visualizations, and learning cards |
+| `assessments` | Diagnostic, quiz, and recall assessments |
+| `questions` | MCQ and open-ended questions |
+| `answers` | Student answers with scores and feedback |
+| `user_node_progress` | Mastery scores and completion tracking |
+| `chat_sessions` | Tutoring chat sessions |
+| `chat_messages` | Chat history with roles and kinds |
+| `hint_events` | Hint requests and responses |
+
+<Note>
+  See `src/db/schema.ts:1` for the complete schema with indexes and constraints.
+</Note>
+
+## Migration Commands
+
+Drizzle provides three main commands for managing migrations:
+
+<Tabs>
+  <Tab title="db:migrate">
+    **Apply Migrations**
+    
+    ```bash
+    npm run db:migrate
+    ```
+    
+    Runs all pending migrations from the `drizzle/` folder.
+    
+    **When to use**:
+    - First time setup
+    - After pulling schema changes from Git
+    - After generating new migrations
+    
+    **Implementation** (`src/db/migrate.ts`):
+    ```typescript
+    import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+    import { db } from "./index";
+    import path from "path";
+    
+    const migrationsFolder = path.resolve(__dirname, "../../drizzle");
+    
+    console.log("Running migrations...");
+    migrate(db, { migrationsFolder });
+    console.log("Migrations complete.");
+    ```
+  </Tab>
+  
+  <Tab title="db:generate">
+    **Generate Migration Files**
+    
+    ```bash
+    npm run db:generate
+    ```
+    
+    Generates SQL migration files in `drizzle/` based on changes to `src/db/schema.ts`.
+    
+    **When to use**:
+    - After modifying schema definitions
+    - Before committing schema changes
+    
+    **Example output**:
+    ```
+    drizzle/0004_new_feature.sql
+    drizzle/meta/0004_snapshot.json
+    ```
+    
+    <Warning>
+      Always review generated SQL before applying migrations to ensure correctness.
+    </Warning>
+  </Tab>
+  
+  <Tab title="db:push">
+    **Push Schema Directly**
+    
+    ```bash
+    npm run db:push
+    ```
+    
+    Directly syncs the database with `src/db/schema.ts` without generating migration files.
+    
+    **When to use**:
+    - Rapid prototyping
+    - Local development experiments
+    - NOT for production
+    
+    <Warning>
+      `db:push` can lose data. Use `db:generate` + `db:migrate` for production workflows.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Migration Workflow
+
+Recommended workflow for schema changes:
+
+<Steps>
+  <Step title="Modify Schema">
+    Edit `src/db/schema.ts` with your changes:
+    
+    ```typescript
+    // Add a new column
+    export const nodes = sqliteTable("nodes", {
+      // ... existing columns
+      difficulty: integer("difficulty").default(1),
+    });
+    ```
+  </Step>
+  
+  <Step title="Generate Migration">
+    Create a migration file:
+    
+    ```bash
+    npm run db:generate
+    ```
+    
+    Review the generated SQL in `drizzle/XXXX_*.sql`:
+    
+    ```sql
+    ALTER TABLE nodes ADD COLUMN difficulty INTEGER DEFAULT 1;
+    ```
+  </Step>
+  
+  <Step title="Apply Migration">
+    Run the migration:
+    
+    ```bash
+    npm run db:migrate
+    ```
+  </Step>
+  
+  <Step title="Commit Changes">
+    Commit both the schema and migration files:
+    
+    ```bash
+    git add src/db/schema.ts drizzle/
+    git commit -m "Add difficulty column to nodes table"
+    ```
+  </Step>
+</Steps>
+
+## Existing Migrations
+
+Sprout ships with four migrations:
+
+```bash
+drizzle/
+├── 0000_milky_wilson_fisk.sql          # Initial schema
+├── 0001_nosy_gunslinger.sql            # Schema updates
+├── 0002_flippant_colonel_america.sql   # More updates
+├── 0003_little_rawhide_kid.sql         # Latest updates
+└── meta/
+    ├── 0000_snapshot.json
+    ├── 0001_snapshot.json
+    ├── 0002_snapshot.json
+    ├── 0003_snapshot.json
+    └── _journal.json
+```
+
+<Info>
+  Drizzle auto-generates migration names. The meta folder contains schema snapshots for diffing.
+</Info>
+
+## Database Location
+
+The database file location is configured via environment variable:
+
+```bash .env
+DB_PATH=./sprout.db        # Default: in backend root
+DB_PATH=/data/sprout.db    # Custom location
+```
+
+**Configuration** (`drizzle.config.ts`):
+```typescript
+dbCredentials: {
+  url: "./sprout.db",  // Hardcoded, but can read from env
+}
+```
+
+## Inspecting the Database
+
+Use SQLite tools to inspect the database:
+
+<CodeGroup>
+```bash sqlite3 CLI
+sqlite3 sprout.db
+
+# List tables
+.tables
+
+# Describe schema
+.schema nodes
+
+# Query data
+SELECT * FROM users;
+
+# Exit
+.quit
+```
+
+```bash DB Browser for SQLite
+# Install DB Browser
+brew install --cask db-browser-for-sqlite  # macOS
+sudo apt install sqlitebrowser             # Linux
+
+# Open database
+db-browser-for-sqlite sprout.db
+```
+
+```bash Drizzle Studio (Coming Soon)
+# Drizzle Studio is in development
+npx drizzle-kit studio
+```
+</CodeGroup>
+
+## Common Operations
+
+<AccordionGroup>
+  <Accordion title="Reset database">
+    Delete the database file and re-run migrations:
+    
+    ```bash
+    cd sprout-backend
+    rm sprout.db
+    npm run db:migrate
+    ```
+    
+    <Warning>
+      This deletes all data. Use only in development.
+    </Warning>
+  </Accordion>
+  
+  <Accordion title="Rollback migration">
+    Drizzle doesn't support automatic rollbacks. Manually revert:
+    
+    1. Delete the migration file from `drizzle/`
+    2. Edit `drizzle/meta/_journal.json` to remove the entry
+    3. Run the SQL `DOWN` migration manually (you need to write it)
+    
+    Or reset the database (see above).
+  </Accordion>
+  
+  <Accordion title="Seed test data">
+    The default user is auto-seeded on backend startup (`src/index.ts:17`):
+    
+    ```typescript
+    const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000";
+    
+    async function ensureDefaultUser() {
+      const existing = await db.select().from(users)
+        .where(eq(users.id, DEFAULT_USER_ID));
+      if (!existing.length) {
+        await db.insert(users).values({
+          id: DEFAULT_USER_ID,
+          email: "default@sprout.local",
+          title: "Default Learner",
+        });
+      }
+    }
+    ```
+    
+    For additional test data, add a seed script or use Drizzle Studio.
+  </Accordion>
+  
+  <Accordion title="Backup database">
+    SQLite databases are single files - just copy:
+    
+    ```bash
+    cp sprout.db sprout.db.backup
+    
+    # Or with timestamp
+    cp sprout.db "sprout.db.$(date +%Y%m%d_%H%M%S)"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Migration fails: table already exists">
+    The database schema is out of sync with migrations.
+    
+    **Solution**:
+    1. Backup your data
+    2. Reset the database: `rm sprout.db`
+    3. Re-run migrations: `npm run db:migrate`
+  </Accordion>
+  
+  <Accordion title="Drizzle can't find schema">
+    Error: `Cannot find module './src/db/schema.ts'`
+    
+    **Solution**: Check `drizzle.config.ts` schema path matches your directory structure.
+  </Accordion>
+  
+  <Accordion title="Database is locked">
+    Error: `SQLITE_BUSY: database is locked`
+    
+    **Solution**:
+    1. Close any SQLite browser tools
+    2. Ensure only one backend instance is running
+    3. Check for abandoned connections
+  </Accordion>
+  
+  <Accordion title="Generated migration looks wrong">
+    Drizzle generated unexpected SQL.
+    
+    **Solution**:
+    1. Review the generated SQL in `drizzle/XXXX_*.sql`
+    2. If incorrect, delete the migration and fix your schema
+    3. Re-generate with `npm run db:generate`
+    4. Manually edit the SQL if needed (not recommended)
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Schema Reference" icon="database" href="https://orm.drizzle.team/docs/sql-schema-declaration">
+    Learn more about Drizzle schema syntax
+  </Card>
+  
+  <Card title="Document Uploads" icon="file-arrow-up" href="/development/document-uploads">
+    Configure S3 for document storage
+  </Card>
+</CardGroup>

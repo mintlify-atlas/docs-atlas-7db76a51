@@ -1,0 +1,72 @@
+---
+title: API Overview
+description: Introduction to the Sprout REST API
+---
+
+The Sprout API is a RESTful API that powers the adaptive learning platform. It provides endpoints for managing learning topics, generating personalized learning paths, and tracking student progress.
+
+## Base URL
+
+```
+http://localhost:8000/api
+```
+
+For production deployments, use your configured domain.
+
+## Authentication
+
+Currently, Sprout uses a hardcoded `DEFAULT_USER_ID` for simplicity. See [Authentication](/api/authentication) for details.
+
+## Response Format
+
+All responses are JSON-encoded. Successful responses return relevant data:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Introduction to React",
+  "createdAt": "2024-01-15T10:30:00.000Z"
+}
+```
+
+Error responses include an `error` field:
+
+```json
+{
+  "error": "Resource not found"
+}
+```
+
+## HTTP Status Codes
+
+| Code | Description |
+|------|-------------|
+| `200` | Success |
+| `201` | Resource created |
+| `204` | Success with no content |
+| `400` | Bad request (missing required fields) |
+| `404` | Resource not found |
+| `500` | Internal server error |
+
+## Core Resources
+
+- **Branches** - Top-level learning collections
+- **Nodes** - Learning graph nodes (topics, concepts, subconcepts)
+- **Assessments** - Diagnostic tests and questions
+- **Progress** - Student mastery tracking
+- **Chat** - Interactive tutor sessions
+- **Agents** - AI-powered content generation (SSE streaming)
+
+## Health Check
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+Returns:
+```json
+{
+  "status": "ok",
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```

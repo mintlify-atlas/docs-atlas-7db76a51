@@ -1,0 +1,341 @@
+---
+title: Chat
+description: Chat endpoints for interactive tutor sessions
+---
+
+Chat endpoints power the interactive tutor that teaches subconcepts chunk-by-chunk with exercises and mastery tracking.
+
+## Sessions
+
+### List Sessions
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/api/chat/sessions?userId=00000000-0000-0000-0000-000000000000&nodeId=abc123"
+```
+</CodeGroup>
+
+**GET** `/api/chat/sessions`
+
+List chat sessions with optional filters.
+
+### Query Parameters
+
+<ParamField query="userId" type="string">
+  Filter by user UUID
+</ParamField>
+
+<ParamField query="nodeId" type="string">
+  Filter by node UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="[]" type="array">
+  <ResponseField name="id" type="string">
+    Session UUID
+  </ResponseField>
+  <ResponseField name="userId" type="string">
+    User UUID
+  </ResponseField>
+  <ResponseField name="nodeId" type="string | null">
+    Associated node UUID
+  </ResponseField>
+  <ResponseField name="startedAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+  <ResponseField name="endedAt" type="string | null">
+    ISO 8601 timestamp (null if active)
+  </ResponseField>
+</ResponseField>
+
+---
+
+### Create Session
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/chat/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "nodeId": "abc123"
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/chat/sessions`
+
+Create a new chat session for learning a subconcept.
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="nodeId" type="string">
+  Subconcept node UUID
+</ParamField>
+
+**Status:** `201 Created`
+
+---
+
+### End Session
+
+**PATCH** `/api/chat/sessions/:id`
+
+End a chat session.
+
+### Body Parameters
+
+<ParamField body="endedAt" type="string">
+  ISO 8601 timestamp (defaults to current time)
+</ParamField>
+
+---
+
+## Messages
+
+### List Messages
+
+**GET** `/api/chat/sessions/:sessionId/messages`
+
+Retrieve all messages in a session, ordered by creation time.
+
+<ResponseField name="[]" type="array">
+  <ResponseField name="id" type="string">
+    Message UUID
+  </ResponseField>
+  <ResponseField name="sessionId" type="string">
+    Session UUID
+  </ResponseField>
+  <ResponseField name="userId" type="string">
+    User UUID
+  </ResponseField>
+  <ResponseField name="role" type="string">
+    `system`, `user`, or `assistant`
+  </ResponseField>
+  <ResponseField name="kind" type="string">
+    `learning`, `hint_request`, `hint_response`, or `evaluation`
+  </ResponseField>
+  <ResponseField name="content" type="string">
+    Message content
+  </ResponseField>
+  <ResponseField name="wasSuccessful" type="boolean | null">
+    Exercise success indicator
+  </ResponseField>
+  <ResponseField name="successSignal" type="string | null">
+    JSON metadata about success
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+---
+
+### Create Message
+
+**POST** `/api/chat/sessions/:sessionId/messages`
+
+Manually create a message (rarely used - prefer the tutor endpoint).
+
+---
+
+## Interactive Tutor
+
+<CodeGroup>
+```bash cURL - Start Session
+curl -X POST http://localhost:8000/api/chat/sessions/session123/tutor \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "content": ""
+  }'
+```
+
+```bash cURL - Answer Question
+curl -X POST http://localhost:8000/api/chat/sessions/session123/tutor \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "content": "[ANSWER] A closure is a function that captures variables from its outer scope."
+  }'
+```
+
+```bash cURL - Request Clarification
+curl -X POST http://localhost:8000/api/chat/sessions/session123/tutor \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "content": "[CLARIFICATION] Can you explain that with an example?"
+  }'
+```
+
+```bash cURL - Drawing Answer
+curl -X POST http://localhost:8000/api/chat/sessions/session123/tutor \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "content": "[ANSWER] Here is my diagram",
+    "drawingImageDataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/chat/sessions/:sessionId/tutor`
+
+Interactive tutoring - send student message, receive AI tutor response.
+
+### Flow
+
+1. **Start:** Send empty `content` to begin the session
+2. **Teach:** Tutor explains a chunk and asks a question
+3. **Answer:** Student responds with `[ANSWER]` prefix
+4. **Evaluate:** Tutor evaluates, gives feedback, moves to next chunk
+5. **Complete:** Session auto-ends when all chunks are covered
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="content" type="string" required>
+  Student message content:
+  - Empty string: Start session
+  - `[ANSWER] ...`: Answer to checkpoint question
+  - `[CLARIFICATION] ...`: Request hint/clarification
+</ParamField>
+
+<ParamField body="drawingImageDataUrl" type="string">
+  Data URL for drawing answer (for `draw` question type):
+  `data:image/png;base64,...` or `data:image/jpeg;base64,...`
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Tutor's response (includes explanation, question, and question type)
+</ResponseField>
+
+<ResponseField name="isComplete" type="boolean">
+  Whether the subconcept is fully taught (session auto-ends if true)
+</ResponseField>
+
+<ResponseField name="toolsUsed" type="array">
+  List of tools the tutor called (e.g., `["generate_example", "create_exercise"]`)
+</ResponseField>
+
+<ResponseField name="reasoning" type="array">
+  Array of reasoning steps from the tutor agent
+</ResponseField>
+
+### Tutor Tools
+
+The tutor has access to these tools:
+
+- `check_student_progress` - Load diagnostic results for parent concept
+- `check_prerequisite_mastery` - Check if prerequisites are mastered
+- `generate_example` - Create a worked example
+- `create_exercise` - Create a practice problem
+- `visualize_concept` - Create an ASCII/text diagram
+- `record_exercise_result` - Persist exercise attempt + update mastery score
+
+---
+
+## Hints
+
+### Create Hint Event
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/chat/hints \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "nodeId": "abc123",
+    "sessionId": "session123",
+    "requestMessageId": "msg1",
+    "responseMessageId": "msg2"
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/chat/hints`
+
+Record a hint request event.
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="nodeId" type="string" required>
+  Node UUID
+</ParamField>
+
+<ParamField body="sessionId" type="string">
+  Session UUID
+</ParamField>
+
+<ParamField body="requestMessageId" type="string">
+  Request message UUID
+</ParamField>
+
+<ParamField body="responseMessageId" type="string">
+  Response message UUID
+</ParamField>
+
+<ParamField body="referencedSuccessMessageIds" type="array">
+  Array of message UUIDs referenced in the hint
+</ParamField>
+
+---
+
+### List Hints
+
+**GET** `/api/chat/hints?userId=USER_ID&nodeId=NODE_ID`
+
+Retrieve hint events with optional filters.
+
+---
+
+## Message Kinds
+
+<ResponseField name="learning" type="kind">
+  Normal tutoring exchange
+</ResponseField>
+
+<ResponseField name="hint_request" type="kind">
+  Student requested clarification (`[CLARIFICATION]`)
+</ResponseField>
+
+<ResponseField name="hint_response" type="kind">
+  Tutor's clarification response
+</ResponseField>
+
+<ResponseField name="evaluation" type="kind">
+  Student's answer to a checkpoint question (`[ANSWER]`)
+</ResponseField>
+
+---
+
+## Question Types
+
+The tutor can ask three types of questions:
+
+<ResponseField name="text" type="question-type">
+  Text-based answer expected
+</ResponseField>
+
+<ResponseField name="code" type="question-type">
+  Code or pseudocode expected
+</ResponseField>
+
+<ResponseField name="draw" type="question-type">
+  Drawing/diagram expected (submit via `drawingImageDataUrl`)
+</ResponseField>

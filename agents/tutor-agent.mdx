@@ -1,0 +1,528 @@
+---
+title: Tutor agent
+description: Teaches subconcepts interactively chunk-by-chunk with exercises and mastery tracking
+---
+
+## Purpose
+
+The Tutor Agent provides interactive, personalized instruction for each subconcept. It breaks learning into digestible chunks, asks checkpoint questions, and records mastery scores.
+
+**Location**: `sprout-backend/src/agents/tutor-chat.ts`
+
+## Teaching approach
+
+The tutor follows a **chunk-based teaching methodology**:
+
+<Steps>
+  <Step title="Check prerequisites">
+    Verifies that prerequisite subconcepts have been mastered before teaching.
+  </Step>
+  
+  <Step title="Break into chunks">
+    Divides the subconcept into 3-6 digestible learning units.
+  </Step>
+  
+  <Step title="Teach each chunk">
+    For each chunk: explain concept → ask checkpoint question → evaluate answer.
+  </Step>
+  
+  <Step title="Record progress">
+    After exercises, calls `record_exercise_result` to update mastery scores.
+  </Step>
+  
+  <Step title="Mark complete">
+    When all chunks are covered and mastery threshold (0.7) is reached, marks subconcept complete.
+  </Step>
+</Steps>
+
+<Info>
+  The tutor uses Socratic method - guiding students to discover answers rather than directly telling them. It asks leading questions and provides hints when students struggle.
+</Info>
+
+## Agent tools
+
+The Tutor Agent has six specialized tools:
+
+<Accordion title="check_student_progress">
+  Loads diagnostic results for the parent concept.
+  
+  **Input**:
+  ```json
+  {
+    "conceptNodeId": "concept-uuid-123",
+    "userId": "user-uuid-456"
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "diagnostic_summary": {
+      "average_score": 0.625,
+      "weak_areas": ["deletion", "balancing"],
+      "strong_areas": ["searching"]
+    },
+    "completed_subconcepts": ["sub1", "sub2"],
+    "current_subconcept": "sub3",
+    "mastery_score": 0.45
+  }
+  ```
+</Accordion>
+
+<Accordion title="check_prerequisite_mastery">
+  Checks if prerequisite subconcepts are mastered.
+  
+  **Input**:
+  ```json
+  {
+    "subconceptId": "sub5-deletion",
+    "userId": "user-uuid-456"
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "prerequisites": [
+      {
+        "id": "sub3-searching",
+        "title": "Searching in BST",
+        "mastery_score": 0.85,
+        "is_mastered": true
+      },
+      {
+        "id": "sub4-insertion",
+        "title": "Insertion in BST",
+        "mastery_score": 0.65,
+        "is_mastered": false
+      }
+    ],
+    "all_mastered": false,
+    "blocking_prerequisites": ["sub4-insertion"]
+  }
+  ```
+</Accordion>
+
+<Accordion title="generate_example">
+  Creates a worked example for illustration.
+  
+  **Input**:
+  ```json
+  {
+    "topic": "BST Insertion",
+    "difficulty": "medium"
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "example": {
+      "scenario": "Insert 15 into BST: [10, 5, 20, 3, 7, 18, 25]",
+      "steps": [
+        "Start at root (10). 15 > 10, go right",
+        "At 20. 15 < 20, go left",
+        "At 18. 15 < 18, go left",
+        "Reached null. Insert 15 as left child of 18"
+      ],
+      "visual": "(ASCII tree diagram)",
+      "key_insight": "Always compare with current node and follow BST property"
+    }
+  }
+  ```
+</Accordion>
+
+<Accordion title="create_exercise">
+  Creates a practice problem for the student.
+  
+  **Input**:
+  ```json
+  {
+    "topic": "BST Deletion",
+    "question_type": "code",
+    "difficulty": "medium"
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "exercise": {
+      "prompt": "Write a function to delete a node from a BST",
+      "type": "code",
+      "starter_code": "def delete_node(root, key):\n    # Your code here\n    pass",
+      "test_cases": [
+        { "input": "[10,5,20,3,7], key=5", "expected": "[10,7,20,3]" }
+      ],
+      "hints": [
+        "Consider three cases: no children, one child, two children",
+        "For two children, find the in-order successor"
+      ]
+    }
+  }
+  ```
+  
+  Question types: `text`, `code`, `draw` (for diagrams).
+</Accordion>
+
+<Accordion title="visualize_concept">
+  Creates an ASCII or text diagram.
+  
+  **Input**:
+  ```json
+  {
+    "concept": "BST structure after inserting [10, 5, 15, 3, 7, 12, 18]"
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "visualization": "        10\n       /  \\\n      5    15\n     / \\   / \\\n    3   7 12  18",
+    "explanation": "Root is 10. Left subtree contains 5,3,7. Right subtree contains 15,12,18."
+  }
+  ```
+</Accordion>
+
+<Accordion title="record_exercise_result">
+  Persists exercise attempt and updates mastery score.
+  
+  **Input**:
+  ```json
+  {
+    "userId": "user-uuid-456",
+    "subconceptId": "sub5-deletion",
+    "exerciseType": "code",
+    "wasCorrect": true,
+    "score": 0.85,
+    "timeSpent": 180
+  }
+  ```
+  
+  **Output**:
+  ```json
+  {
+    "success": true,
+    "new_mastery_score": 0.72,
+    "attempts_count": 3,
+    "should_move_on": true,
+    "message": "Great work! Mastery threshold reached (0.7). Ready for next subconcept."
+  }
+  ```
+  
+  Mastery score updates use weighted average: `0.7 * old_score + 0.3 * new_score`.
+</Accordion>
+
+## Chunk-based teaching
+
+The tutor breaks each subconcept into 3-6 chunks:
+
+### Example: "BST Deletion" subconcept
+
+<Steps>
+  <Step title="Chunk 1: Deletion overview">
+    **Explain**: Three cases - leaf node, one child, two children.
+    
+    **Question**: "Which case is simplest to handle?"
+    
+    **Expected**: "Leaf node - just remove it."
+  </Step>
+  
+  <Step title="Chunk 2: Leaf node deletion">
+    **Explain**: Find node, set parent pointer to null.
+    
+    **Question**: "What happens if the node to delete is the root and it's a leaf?"
+    
+    **Expected**: "The tree becomes empty (root = null)."
+  </Step>
+  
+  <Step title="Chunk 3: One child deletion">
+    **Explain**: Replace node with its child.
+    
+    **Question**: "Why can we directly replace the node with its child?"
+    
+    **Expected**: "Because the child subtree already satisfies BST property."
+  </Step>
+  
+  <Step title="Chunk 4: Two children deletion">
+    **Explain**: Find in-order successor, swap values, delete successor.
+    
+    **Question**: "Why use in-order successor instead of predecessor?"
+    
+    **Expected**: "Either works, but successor (smallest in right subtree) is convention."
+  </Step>
+  
+  <Step title="Chunk 5: Code implementation">
+    **Exercise**: Write deletion function (code question).
+    
+    **Evaluation**: Run test cases, provide feedback.
+  </Step>
+  
+  <Step title="Chunk 6: Edge cases">
+    **Exercise**: Handle deletion when tree has only root (draw question).
+    
+    **Evaluation**: Check diagram correctness.
+  </Step>
+</Steps>
+
+<Note>
+  Chunk count varies based on subconcept complexity. Simple concepts might have 3 chunks, complex ones up to 6.
+</Note>
+
+## Question types
+
+The tutor asks three types of checkpoint questions:
+
+### Text questions
+
+```json
+{
+  "type": "text",
+  "prompt": "Explain why a BST maintains sorted order.",
+  "expected_keywords": ["left subtree", "smaller", "right subtree", "larger"],
+  "min_keywords": 3
+}
+```
+
+Evaluation: Keyword matching + semantic similarity with Claude.
+
+### Code questions
+
+```json
+{
+  "type": "code",
+  "prompt": "Write a function to search for a value in a BST.",
+  "starter_code": "def search(root, target):\n    pass",
+  "test_cases": [
+    { "input": "[10,5,15], target=5", "expected": true },
+    { "input": "[10,5,15], target=7", "expected": false }
+  ]
+}
+```
+
+Evaluation: Run test cases (Python exec or JavaScript eval).
+
+### Draw questions
+
+```json
+{
+  "type": "draw",
+  "prompt": "Draw the BST after inserting [10, 5, 15, 3, 7].",
+  "evaluation_criteria": [
+    "Root is 10",
+    "Left child of 10 is 5",
+    "Right child of 10 is 15",
+    "5 has children 3 (left) and 7 (right)"
+  ]
+}
+```
+
+Evaluation: Claude analyzes the drawing (base64 image from Excalidraw) against criteria.
+
+<Info>
+  The Excalidraw integration allows students to draw tree diagrams directly in the learning interface. The tutor evaluates structure correctness.
+</Info>
+
+## Tutor configuration
+
+From `sprout-backend/src/agents/tutor-chat.ts`:
+
+```typescript
+export async function runTutorAgent({
+  sessionId,
+  subconceptId,
+  userId,
+  studentMessage,
+  sseWriter
+}: TutorAgentParams): Promise<TutorResponse> {
+  // Load subconcept and progress
+  const subconcept = await db.query.nodes.findFirst({
+    where: eq(nodes.id, subconceptId)
+  });
+  
+  const progress = await db.query.userNodeProgress.findFirst({
+    where: and(
+      eq(userNodeProgress.userId, userId),
+      eq(userNodeProgress.nodeId, subconceptId)
+    )
+  });
+  
+  // System prompt
+  const systemPrompt = `
+    You are an expert AI tutor teaching: ${subconcept.title}
+    
+    ${subconcept.desc}
+    
+    Student's current mastery: ${progress?.masteryScore || 0}
+    
+    Teaching approach:
+    1. Break into 3-6 chunks
+    2. For each chunk: explain → ask question → evaluate
+    3. Use Socratic method - guide students to discover answers
+    4. Record exercise results to update mastery
+    5. Mark [COMPLETE] when mastery ≥ 0.7
+  `;
+  
+  // Run agent loop (5 iterations for tutor)
+  const result = await agentLoop({
+    systemPrompt,
+    userMessage: studentMessage,
+    tools: tutorTools,
+    maxIterations: 5,
+    callbacks: {
+      onThinking: (text) => sseWriter?.send("agent_reasoning", { agent: "tutor", text }),
+      onToolCall: (tool, input) => sseWriter?.send("tool_call", { tool, input }),
+      onToolResult: (tool, result) => sseWriter?.send("tool_result", { tool, result })
+    }
+  });
+  
+  return {
+    content: result.finalText,
+    isComplete: result.finalText.includes("[COMPLETE]"),
+    toolsUsed: result.toolCalls.map(tc => tc.name),
+    reasoning: result.conversationHistory
+  };
+}
+```
+
+<Warning>
+  The tutor uses only 5 iterations (vs 15 for other agents) to keep interactions snappy. If students need more guidance, they can send additional messages.
+</Warning>
+
+## Mastery tracking
+
+Mastery scores are calculated using a weighted moving average:
+
+```typescript
+function updateMasteryScore(
+  oldScore: number,
+  exerciseScore: number,
+  weight: number = 0.3
+): number {
+  return oldScore * (1 - weight) + exerciseScore * weight;
+}
+```
+
+**Example progression**:
+- Initial: 0.0
+- After exercise 1 (score 0.6): `0.0 * 0.7 + 0.6 * 0.3 = 0.18`
+- After exercise 2 (score 0.8): `0.18 * 0.7 + 0.8 * 0.3 = 0.366`
+- After exercise 3 (score 0.9): `0.366 * 0.7 + 0.9 * 0.3 = 0.526`
+- After exercise 4 (score 0.85): `0.526 * 0.7 + 0.85 * 0.3 = 0.623`
+- After exercise 5 (score 0.95): `0.623 * 0.7 + 0.95 * 0.3 = 0.721` ✓ Mastered!
+
+<Tip>
+  The 0.7 threshold ensures students have solid understanding before moving on. Lower thresholds risk gaps, higher thresholds can cause frustration.
+</Tip>
+
+## Clarification requests
+
+Students can request clarification by prefixing messages with `[CLARIFICATION]`:
+
+```json
+{
+  "message": "[CLARIFICATION] What does in-order successor mean?"
+}
+```
+
+The tutor recognizes this and provides additional explanation without creating a new exercise.
+
+## API endpoint
+
+```http
+POST /api/chat/sessions/:sessionId/tutor
+```
+
+**Request body**:
+```json
+{
+  "message": "I'm ready to learn about BST deletion.",
+  "subconceptId": "sub5-deletion",
+  "userId": "user-uuid-456"
+}
+```
+
+**Response**:
+```json
+{
+  "content": "Great! Let's break down BST deletion into chunks. There are three cases to consider: deleting a leaf node, a node with one child, and a node with two children. Which case do you think is simplest?",
+  "isComplete": false,
+  "toolsUsed": ["check_student_progress", "check_prerequisite_mastery"],
+  "reasoning": [
+    "Student is ready to learn deletion",
+    "Prerequisites (searching, insertion) are mastered",
+    "Starting with overview chunk"
+  ]
+}
+```
+
+## Example conversation flow
+
+<Steps>
+  <Step title="Student starts learning">
+    **Student**: "I'm ready to learn BST deletion."
+    
+    **Tutor**: "Great! Let's start. There are three cases: leaf, one child, two children. Which is simplest?"
+  </Step>
+  
+  <Step title="Student responds">
+    **Student**: "Leaf node?"
+    
+    **Tutor**: "Exactly! For a leaf, we just remove it. Now, what if the node has one child?"
+  </Step>
+  
+  <Step title="Student asks for clarification">
+    **Student**: "[CLARIFICATION] What if the node is the root?"
+    
+    **Tutor**: "Good question! If the root is a leaf, the tree becomes empty. If it has one child, that child becomes the new root."
+  </Step>
+  
+  <Step title="Tutor gives exercise">
+    **Tutor**: "Let's practice. Write a function to delete a leaf node."
+    
+    *Uses `create_exercise` tool*
+  </Step>
+  
+  <Step title="Student submits code">
+    **Student**: (submits code)
+    
+    **Tutor**: *Evaluates, calls `record_exercise_result`*
+    
+    "Nice work! Your mastery is now 0.65. Let's continue to two-children deletion."
+  </Step>
+  
+  <Step title="Completion">
+    After several exercises:
+    
+    **Tutor**: "Excellent! You've mastered BST deletion (mastery: 0.75). [COMPLETE]"
+  </Step>
+</Steps>
+
+## Performance considerations
+
+**Token usage per interaction**: 2,000-8,000 tokens
+- System prompt: ~1,000 tokens
+- Student message: ~100-500 tokens
+- Tutor response: ~500-2,000 tokens
+- Tool calls: ~500-4,000 tokens
+
+**Latency per interaction**: 5-15 seconds
+- Tool execution: 1-3 seconds
+- Claude API call: 3-10 seconds
+- Total: 5-15 seconds
+
+<Info>
+  The 5-iteration limit keeps latency under 30 seconds for most interactions. Students can send follow-up messages if they need more help.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Tutoring Experience" icon="graduation-cap" href="/learning/tutoring">
+    Learn about the full tutoring workflow
+  </Card>
+  
+  <Card title="Progress Tracking" icon="chart-line" href="/learning/progress-tracking">
+    See how mastery scores are tracked
+  </Card>
+</CardGroup>

@@ -1,0 +1,306 @@
+---
+title: Agent loop
+description: Shared foundation for all Claude-powered agents with tool calling and reasoning visibility
+---
+
+## Overview
+
+The agent loop is the foundation for all Sprout agents. It sends messages to Claude, executes tool calls, feeds results back, and loops until the model stops calling tools or hits the maximum iteration limit.
+
+**Location**: `sprout-backend/src/agents/agent-loop.ts`
+
+## Loop flow
+
+The agent loop follows this pattern:
+
+```
+Initial message → Claude → [text + tool_use blocks]
+                              ↓
+                    emit onThinking(text)
+                    execute each tool
+                    emit onToolCall / onToolResult
+                              ↓
+                    feed tool_results back → Claude → ...
+                              ↓
+                    stop_reason="end_turn" → return finalText + toolCalls
+```
+
+<Steps>
+  <Step title="Send message to Claude">
+    The loop begins by sending the initial message (system prompt + user context) to Claude.
+  </Step>
+  
+  <Step title="Process response">
+    Claude returns text blocks (reasoning) and tool_use blocks (function calls).
+  </Step>
+  
+  <Step title="Emit reasoning">
+    The `onThinking` callback captures Claude's reasoning text and emits it as `agent_reasoning` SSE events.
+  </Step>
+  
+  <Step title="Execute tools">
+    Each tool call is executed with the provided parameters. Results are captured and emitted via `onToolCall` and `onToolResult` callbacks.
+  </Step>
+  
+  <Step title="Feed results back">
+    Tool results are formatted as `tool_result` content blocks and sent back to Claude.
+  </Step>
+  
+  <Step title="Loop or complete">
+    If Claude calls more tools, the loop continues. If `stop_reason="end_turn"`, the agent completes.
+  </Step>
+</Steps>
+
+## Key features
+
+### Reasoning visibility
+
+The agent loop captures Claude's reasoning text between tool calls:
+
+```typescript
+const result = await agentLoop({
+  systemPrompt: "You are an expert tutor...",
+  userMessage: "Teach me about binary search trees",
+  tools: tutorTools,
+  callbacks: {
+    onThinking: (text) => {
+      // Stream reasoning to frontend
+      sseWriter.send("agent_reasoning", { agent: "tutor", text });
+    },
+    onToolCall: (tool, input) => {
+      sseWriter.send("tool_call", { tool, input });
+    },
+    onToolResult: (tool, result) => {
+      const summary = result.substring(0, 200);
+      sseWriter.send("tool_result", { tool, summary });
+    }
+  }
+});
+```
+
+<Info>
+  Reasoning visibility is a key feature that provides transparency into agent decision-making. Users can see why an agent chose to add a subconcept or insert a prerequisite concept.
+</Info>
+
+### Retry with backoff
+
+Rate limits (HTTP 429) are automatically retried with exponential backoff:
+
+- 1st retry: 2 seconds
+- 2nd retry: 4 seconds
+- 3rd retry: 8 seconds
+
+After 3 retries, the error is propagated to the caller.
+
+```typescript
+try {
+  const response = await anthropic.messages.create({
+    model: "claude-opus-4-20250514",
+    max_tokens: 8000,
+    system: systemPrompt,
+    messages: conversationHistory,
+    tools: toolDefinitions
+  });
+} catch (error: any) {
+  if (error.status === 429 && retries < 3) {
+    const delay = Math.pow(2, retries) * 1000; // 2s, 4s, 8s
+    await new Promise(resolve => setTimeout(resolve, delay));
+    retries++;
+    continue; // Retry
+  }
+  throw error; // Propagate after max retries
+}
+```
+
+### Configurable iterations
+
+Agents have different iteration limits based on their complexity:
+
+| Agent | Max Iterations | Reason |
+|-------|----------------|--------|
+| Topic Agent | 15 | Needs to extract context and create multiple concepts |
+| Subconcept Agent | 15 | Creates diagnostic questions + subconcept DAG |
+| Refinement Agent | 15 | Complex ORAV loop with multiple verification steps |
+| Tutor Agent | 5 | Shorter interactions with students (chunk-based) |
+| Grading Agent | 10 | Semantic evaluation of student answers |
+
+```typescript
+const result = await agentLoop({
+  systemPrompt,
+  userMessage,
+  tools,
+  maxIterations: 5, // For tutor agent
+  callbacks
+});
+```
+
+<Warning>
+  If an agent hits the max iteration limit, it will stop and return partial results. Increase `maxIterations` if agents are consistently hitting this limit.
+</Warning>
+
+## Agent loop parameters
+
+<ParamField path="systemPrompt" type="string" required>
+  System prompt that defines the agent's role and behavior.
+</ParamField>
+
+<ParamField path="userMessage" type="string" required>
+  Initial user message or context for the agent to process.
+</ParamField>
+
+<ParamField path="tools" type="Tool[]" required>
+  Array of Claude tool definitions that the agent can call.
+</ParamField>
+
+<ParamField path="maxIterations" type="number">
+  Maximum number of tool-calling iterations. Defaults to 15.
+</ParamField>
+
+<ParamField path="model" type="string">
+  Claude model to use. Defaults to `claude-opus-4-20250514`.
+</ParamField>
+
+<ParamField path="callbacks" type="object">
+  Optional callbacks for reasoning and tool execution visibility.
+  
+  <Expandable title="callbacks">
+    <ParamField path="onThinking" type="(text: string) => void">
+      Called when Claude produces reasoning text between tool calls.
+    </ParamField>
+    
+    <ParamField path="onToolCall" type="(tool: string, input: any) => void">
+      Called when Claude invokes a tool.
+    </ParamField>
+    
+    <ParamField path="onToolResult" type="(tool: string, result: any) => void">
+      Called when a tool execution completes.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Agent loop return value
+
+The agent loop returns:
+
+<ResponseField name="finalText" type="string">
+  The final text response from Claude after all tool calls.
+</ResponseField>
+
+<ResponseField name="toolCalls" type="ToolCall[]">
+  Array of all tool calls made during the loop, with inputs and results.
+</ResponseField>
+
+<ResponseField name="conversationHistory" type="Message[]">
+  Complete conversation history including system prompt, tool calls, and results.
+</ResponseField>
+
+## Tool execution
+
+Tools are executed synchronously in the order Claude requests them:
+
+```typescript
+for (const toolUse of toolUseBlocks) {
+  const { id, name, input } = toolUse;
+  
+  // Emit tool call event
+  callbacks?.onToolCall?.(name, input);
+  
+  // Execute the tool
+  const tool = tools.find(t => t.name === name);
+  const result = await tool.execute(input);
+  
+  // Emit tool result event
+  callbacks?.onToolResult?.(name, result);
+  
+  // Add tool_result to conversation history
+  conversationHistory.push({
+    role: "user",
+    content: [{
+      type: "tool_result",
+      tool_use_id: id,
+      content: JSON.stringify(result)
+    }]
+  });
+}
+```
+
+<Note>
+  Tool execution is synchronous within each iteration. If Claude requests 3 tools, they execute sequentially before the next Claude API call.
+</Note>
+
+## Small mode
+
+Agents support a "small mode" for cost-efficient testing:
+
+```typescript
+const result = await topicAgent.run({
+  topicNodeId,
+  userId,
+  small: true // Generates 1-2 concepts instead of 6-10
+});
+```
+
+Small mode reduces:
+- **Topic Agent**: 1-2 concepts instead of 6-10
+- **Subconcept Agent**: 2-3 questions and 2-3 subconcepts instead of 5-10 / 8-12
+
+## Error handling
+
+The agent loop handles several error scenarios:
+
+<Accordion title="Rate limit errors (429)">
+  Automatically retried with exponential backoff (2s, 4s, 8s). After 3 retries, the error is propagated.
+</Accordion>
+
+<Accordion title="Tool execution errors">
+  If a tool throws an error, it's converted to a `tool_result` with an error message. Claude receives the error and can decide how to proceed.
+</Accordion>
+
+<Accordion title="Max iterations reached">
+  If the agent hits `maxIterations`, it stops and returns the final text and all tool calls up to that point.
+</Accordion>
+
+<Accordion title="Invalid tool calls">
+  If Claude requests a tool that doesn't exist, an error `tool_result` is sent back and the loop continues.
+</Accordion>
+
+## Performance considerations
+
+### Token usage
+
+Each iteration adds to the conversation history:
+- System prompt (once): ~1,000 tokens
+- Each tool call: ~100-500 tokens (input)
+- Each tool result: ~200-2,000 tokens (result)
+- Claude reasoning: ~200-1,000 tokens per iteration
+
+**Typical token usage**:
+- Topic Agent (15 iterations): 20,000-40,000 tokens
+- Tutor Agent (5 iterations): 5,000-15,000 tokens
+
+### Latency
+
+Each iteration requires:
+- Claude API call: 2-5 seconds
+- Tool execution: 0.1-2 seconds per tool
+- Total per iteration: 2-10 seconds
+
+**Typical latency**:
+- Topic Agent (15 iterations): 30-150 seconds
+- Tutor Agent (5 iterations): 10-50 seconds
+
+<Tip>
+  Use SSE streaming to provide real-time feedback during long-running agent operations. The frontend can display reasoning, tool calls, and created nodes as they happen.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Topic Agent" icon="diagram-project" href="/agents/topic-agent">
+    Learn how the Topic Agent uses the loop to generate concepts
+  </Card>
+  
+  <Card title="Refinement Agent" icon="wand-magic-sparkles" href="/agents/refinement-agent">
+    See how the Refinement Agent uses the ORAV loop
+  </Card>
+</CardGroup>

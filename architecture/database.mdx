@@ -1,0 +1,492 @@
+---
+title: Database Schema
+description: SQLite schema and data model powering Sprout's learning graphs
+---
+
+Sprout uses SQLite with Drizzle ORM for type-safe database access. The schema is optimized for DAG-based learning graphs with real-time progress tracking.
+
+## Schema Overview
+
+The database is organized into four main domains:
+
+<Tabs>
+  <Tab title="Core Entities">
+    - `users`: Learner accounts
+    - `branches`: Topic containers (learning pathways)
+    - `nodes`: Graph nodes (root/concept/subconcept)
+    - `node_edges`: Dependency relationships (DAG)
+    - `topic_documents`: S3-stored PDFs and extracted text
+  </Tab>
+  <Tab title="Learning Content">
+    - `node_contents`: Explanations, visualizations, learning cards
+    - `node_generations`: AI generation metadata and prompts
+  </Tab>
+  <Tab title="Assessments">
+    - `assessments`: Diagnostic/quiz containers
+    - `questions`: MCQ and open-ended questions
+    - `answers`: Student responses with scores
+  </Tab>
+  <Tab title="Progress & Chat">
+    - `user_node_progress`: Mastery tracking per node
+    - `chat_sessions`: Tutor conversation containers
+    - `chat_messages`: Conversation history
+    - `hint_events`: Hint request/response pairs
+  </Tab>
+</Tabs>
+
+## Core Entities
+
+### Users
+
+```typescript src/db/schema.ts
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(), // uuid
+  email: text('email').notNull().unique(),
+  title: text('title'),
+  desc: text('desc'),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+});
+```
+
+<Note>
+Sprout currently uses a **single hardcoded user** (`00000000-0000-0000-0000-000000000000`) seeded at server startup. Multi-user auth is not implemented.
+</Note>
+
+### Branches (Topics)
+
+```typescript
+export const branches = sqliteTable('branches', {
+  id: text('id').primaryKey(),
+  title: text('title').notNull(),
+  userId: text('user_id').notNull().references(() => users.id),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('branches_user_id_idx').on(table.userId)
+]);
+```
+
+**Usage**: Each branch represents a topic (e.g., "Linear Algebra", "Fauna from Peru"). Branches contain a root node plus 6-10 concept nodes.
+
+### Nodes
+
+```typescript
+export const nodes = sqliteTable('nodes', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  type: text('type', { enum: ['root', 'concept', 'subconcept'] }).notNull(),
+  branchId: text('branch_id').references(() => branches.id),
+  parentId: text('parent_id').references((): any => nodes.id),
+  title: text('title').notNull(),
+  desc: text('desc'),
+  accuracyScore: real('accuracy_score').notNull().default(0), // 0..1
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('nodes_user_type_idx').on(table.userId, table.type),
+  index('nodes_branch_id_idx').on(table.branchId),
+  index('nodes_parent_id_idx').on(table.parentId),
+]);
+```
+
+**Node Types**:
+- **`root`**: Topic entry point (1 per branch, `parentId` is null)
+- **`concept`**: Major learning concept (6-10 per topic, `parentId` = root)
+- **`subconcept`**: Granular learning unit (8-12 per concept, `parentId` = concept)
+
+**Hierarchy**:
+```
+Branch: "Linear Algebra"
+  └─ Root Node: "Linear Algebra"
+      ├─ Concept: "Vectors"
+      │   ├─ Subconcept: "Vector Addition"
+      │   ├─ Subconcept: "Scalar Multiplication"
+      │   └─ Subconcept: "Dot Product"
+      ├─ Concept: "Matrices"
+      │   └─ ...
+      └─ ...
+```
+
+### Node Edges (DAG)
+
+```typescript
+export const nodeEdges = sqliteTable('node_edges', {
+  id: text('id').primaryKey(),
+  sourceNodeId: text('source_node_id').notNull().references(() => nodes.id),
+  targetNodeId: text('target_node_id').notNull().references(() => nodes.id),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('node_edges_source_idx').on(table.sourceNodeId),
+  index('node_edges_target_idx').on(table.targetNodeId),
+  uniqueIndex('node_edges_source_target_idx').on(
+    table.sourceNodeId,
+    table.targetNodeId
+  ),
+]);
+```
+
+**DAG Properties**:
+- Edges represent **prerequisites**: `sourceNodeId` must be completed before `targetNodeId`
+- No cycles allowed (validated by agents using BFS)
+- Multiple parents allowed (e.g., a subconcept requiring two prerequisite subconcepts)
+
+<Info>
+Edges form a **Directed Acyclic Graph (DAG)**, not a tree. This allows flexible prerequisite relationships (e.g., "Matrix Multiplication" depends on both "Matrix Basics" and "Dot Product").
+</Info>
+
+### Topic Documents
+
+```typescript
+export const topicDocuments = sqliteTable('topic_documents', {
+  id: text('id').primaryKey(),
+  nodeId: text('node_id').notNull().references(() => nodes.id),
+  originalFilename: text('original_filename').notNull(),
+  s3Key: text('s3_key').notNull(),
+  mimeType: text('mime_type').notNull(),
+  fileSizeBytes: integer('file_size_bytes').notNull(),
+  extractedText: text('extracted_text'), // pdf-parse output
+  extractionStatus: text('extraction_status', {
+    enum: ['pending', 'completed', 'failed']
+  }).notNull().default('pending'),
+  extractionError: text('extraction_error'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('topic_documents_node_id_idx').on(table.nodeId)
+]);
+```
+
+**Usage**: When creating a topic, users can upload PDFs. The backend:
+1. Uploads to S3 (`documents/{nodeId}/{uuid}-{filename}`)
+2. Extracts text using `pdf-parse`
+3. Stores in `extractedText` for agent context
+
+## Learning Content
+
+### Node Contents
+
+```typescript
+export const nodeContents = sqliteTable('node_contents', {
+  id: text('id').primaryKey(),
+  nodeId: text('node_id').notNull().references(() => nodes.id),
+  explanationMd: text('explanation_md').notNull(),
+  visualizationKind: text('visualization_kind'), // 'mermaid' | 'svg' | 'json'
+  visualizationPayload: text('visualization_payload'),
+  cards: text('cards'), // JSON: [{ id, index, explanation, question, questionType }]
+  generatedByModel: text('generated_by_model'),
+  generationPromptHash: text('generation_prompt_hash'),
+  status: text('status', { enum: ['draft', 'active', 'archived'] })
+    .notNull().default('active'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('node_contents_node_status_idx').on(table.nodeId, table.status)
+]);
+```
+
+**Fields**:
+- `explanationMd`: Main learning content (Markdown)
+- `visualizationKind`: Optional diagram type
+- `cards`: JSON array of learning blocks (text/mcq/code/draw)
+
+### Node Generations
+
+```typescript
+export const nodeGenerations = sqliteTable('node_generations', {
+  id: text('id').primaryKey(),
+  nodeId: text('node_id').notNull().references(() => nodes.id),
+  trigger: text('trigger', {
+    enum: ['on_first_enter', 'manual_regenerate', 'system_refresh']
+  }).notNull(),
+  model: text('model'),
+  prompt: text('prompt'),
+  responseMeta: text('response_meta'), // JSON string
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('node_generations_node_created_idx').on(table.nodeId, table.createdAt)
+]);
+```
+
+**Usage**: Logs all AI-generated content for audit/debugging.
+
+## Assessments
+
+### Assessments
+
+```typescript
+export const assessments = sqliteTable('assessments', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  targetNodeId: text('target_node_id').notNull().references(() => nodes.id),
+  type: text('type', { enum: ['diagnostic', 'quiz', 'recall'] })
+    .notNull().default('diagnostic'),
+  title: text('title'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  completedAt: text('completed_at'),
+}, (table) => [
+  index('assessments_user_node_type_idx').on(
+    table.userId, table.targetNodeId, table.type
+  )
+]);
+```
+
+**Types**:
+- `diagnostic`: Pre-concept assessment (used by Concept Refinement Agent)
+- `quiz`: Mid-learning check
+- `recall`: Post-learning retention test
+
+### Questions
+
+```typescript
+export const questions = sqliteTable('questions', {
+  id: text('id').primaryKey(),
+  assessmentId: text('assessment_id').notNull().references(() => assessments.id),
+  nodeId: text('node_id').references(() => nodes.id),
+  format: text('format', { enum: ['mcq', 'open_ended'] }).notNull(),
+  prompt: text('prompt').notNull(),
+  options: text('options'), // JSON string (for MCQ)
+  correctAnswer: text('correct_answer'),
+  gradingRubric: text('grading_rubric'), // JSON string
+  difficulty: integer('difficulty').notNull().default(1), // 1..5
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('questions_assessment_id_idx').on(table.assessmentId),
+  index('questions_node_id_idx').on(table.nodeId)
+]);
+```
+
+**Question Formats**:
+- `mcq`: Multiple choice (4 options)
+- `open_ended`: Free text response (graded by AI)
+
+### Answers
+
+```typescript
+export const answers = sqliteTable('answers', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  assessmentId: text('assessment_id').notNull().references(() => assessments.id),
+  questionId: text('question_id').notNull().references(() => questions.id),
+  answerText: text('answer_text'), // open_ended
+  selectedOption: text('selected_option'), // mcq
+  isCorrect: integer('is_correct', { mode: 'boolean' }),
+  score: real('score'), // 0..1 or 0..100 (normalized to 0..1)
+  feedback: text('feedback'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('answers_user_assessment_idx').on(table.userId, table.assessmentId),
+  index('answers_question_id_idx').on(table.questionId)
+]);
+```
+
+**Score Normalization**:
+```typescript
+function normalizeScore(rawScore: number | null, isCorrect: boolean | null) {
+  if (rawScore === null) {
+    if (isCorrect === true) return 1;
+    if (isCorrect === false) return 0;
+    return null;
+  }
+  const normalized = rawScore > 1 ? rawScore / 100 : rawScore;
+  return Math.max(0, Math.min(1, normalized));
+}
+```
+
+## Progress Tracking
+
+### User Node Progress
+
+```typescript
+export const userNodeProgress = sqliteTable('user_node_progress', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  nodeId: text('node_id').notNull().references(() => nodes.id),
+  firstEnteredAt: text('first_entered_at'),
+  lastEnteredAt: text('last_entered_at'),
+  completedAt: text('completed_at'),
+  masteryScore: real('mastery_score').notNull().default(0), // 0..1
+  attemptsCount: integer('attempts_count').notNull().default(0),
+  hasGeneratedSubnodes: integer('has_generated_subnodes', { mode: 'boolean' })
+    .notNull().default(false),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  uniqueIndex('user_node_progress_user_node_idx').on(table.userId, table.nodeId),
+  index('user_node_progress_node_mastery_idx').on(table.nodeId, table.masteryScore)
+]);
+```
+
+**Mastery Calculation**:
+- Updated by Tutor Agent via `record_exercise_result` tool
+- Weighted average of recent exercise scores
+- Node marked completed when `masteryScore >= 0.7`
+
+## Chat & Tutoring
+
+### Chat Sessions
+
+```typescript
+export const chatSessions = sqliteTable('chat_sessions', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id),
+  nodeId: text('node_id').references(() => nodes.id),
+  startedAt: text('started_at').notNull().default(sql`(datetime('now'))`),
+  endedAt: text('ended_at'),
+}, (table) => [
+  index('chat_sessions_user_started_idx').on(table.userId, table.startedAt),
+  index('chat_sessions_node_started_idx').on(table.nodeId, table.startedAt)
+]);
+```
+
+### Chat Messages
+
+```typescript
+export const chatMessages = sqliteTable('chat_messages', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => chatSessions.id),
+  userId: text('user_id').notNull().references(() => users.id),
+  role: text('role', { enum: ['system', 'user', 'assistant'] }).notNull(),
+  kind: text('kind', {
+    enum: ['learning', 'hint_request', 'hint_response', 'evaluation']
+  }).notNull().default('learning'),
+  content: text('content').notNull(),
+  wasSuccessful: integer('was_successful', { mode: 'boolean' }),
+  successSignal: text('success_signal'), // JSON string
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('chat_messages_session_created_idx').on(table.sessionId, table.createdAt),
+  index('chat_messages_user_successful_idx').on(table.userId, table.wasSuccessful)
+]);
+```
+
+**Message Kinds**:
+- `learning`: General tutoring conversation
+- `hint_request`: Student asks for help
+- `hint_response`: Tutor provides Socratic hint
+- `evaluation`: Tutor evaluates student's answer
+
+## Database Migrations
+
+### Running Migrations
+
+```bash
+# Generate migration from schema changes
+npm run db:generate
+
+# Apply migrations to local SQLite
+npm run db:migrate
+
+# Push schema directly (dev only)
+npm run db:push
+```
+
+### Migration Files
+
+Migrations are stored in `drizzle/` directory:
+
+```sql drizzle/0000_init.sql
+CREATE TABLE `users` (
+  `id` text PRIMARY KEY NOT NULL,
+  `email` text NOT NULL,
+  `title` text,
+  `desc` text,
+  `updated_at` text DEFAULT (datetime('now')) NOT NULL,
+  `created_at` text DEFAULT (datetime('now')) NOT NULL
+);
+
+CREATE UNIQUE INDEX `users_email_unique` ON `users` (`email`);
+
+-- ... (full schema DDL)
+```
+
+## Query Patterns
+
+### Common Queries
+
+<CodeGroup>
+```typescript Load Topic Graph
+// Get all nodes for a branch
+const topicGraph = await db.select()
+  .from(nodes)
+  .where(eq(nodes.branchId, branchId));
+
+// Get concept edges
+const edges = await db.select()
+  .from(nodeEdges)
+  .where(inArray(
+    nodeEdges.sourceNodeId,
+    topicGraph.filter(n => n.type === 'concept').map(n => n.id)
+  ));
+```
+
+```typescript Check Prerequisites
+// Find all prerequisite nodes for a node
+const prerequisites = await db.select({
+  prerequisiteId: nodeEdges.sourceNodeId
+})
+  .from(nodeEdges)
+  .where(eq(nodeEdges.targetNodeId, nodeId));
+
+// Check if all prerequisites are completed
+const progress = await db.select()
+  .from(userNodeProgress)
+  .where(and(
+    eq(userNodeProgress.userId, userId),
+    inArray(userNodeProgress.nodeId, prerequisites.map(p => p.prerequisiteId))
+  ));
+
+const allCompleted = progress.every(p => 
+  p.completedAt || p.masteryScore >= 0.7
+);
+```
+
+```typescript Load Diagnostic Results
+// Get latest diagnostic for a concept
+const assessment = await db.select()
+  .from(assessments)
+  .where(and(
+    eq(assessments.userId, userId),
+    eq(assessments.targetNodeId, conceptNodeId),
+    eq(assessments.type, 'diagnostic')
+  ))
+  .orderBy(desc(assessments.createdAt))
+  .limit(1);
+
+const questions = await db.select()
+  .from(questions)
+  .where(eq(questions.assessmentId, assessment.id));
+
+const answers = await db.select()
+  .from(answers)
+  .where(eq(answers.assessmentId, assessment.id));
+```
+</CodeGroup>
+
+## Performance Considerations
+
+### Indexes
+
+All foreign keys and common filter columns have indexes:
+- `nodes`: `(userId, type)`, `branchId`, `parentId`
+- `nodeEdges`: `sourceNodeId`, `targetNodeId`, unique `(sourceNodeId, targetNodeId)`
+- `userNodeProgress`: unique `(userId, nodeId)`, `(nodeId, masteryScore)`
+- `chatMessages`: `(sessionId, createdAt)`, `(userId, wasSuccessful)`
+
+### SQLite Limitations
+
+<Note>
+SQLite is single-writer. For production multi-user deployments, consider PostgreSQL with Drizzle's `drizzle-orm/pg-core` adapter.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Backend Routes" icon="server" href="/architecture/backend">
+    Explore API endpoints and agent orchestration
+  </Card>
+  <Card title="Agent System" icon="wrench" href="/agents/introduction">
+    See how agents persist data using tools
+  </Card>
+  <Card title="API Reference" icon="chart-network" href="/api/overview">
+    Learn about the REST API endpoints
+  </Card>
+</CardGroup>

@@ -1,0 +1,87 @@
+---
+title: Authentication
+description: How authentication works in the Sprout API
+---
+
+## Default User Authentication
+
+Sprout currently uses a **hardcoded default user** for simplicity during development. All requests are associated with this user.
+
+### Default User ID
+
+```typescript
+const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000";
+```
+
+This user is automatically created on server startup:
+
+```json
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "email": "default@sprout.local",
+  "title": "Default Learner"
+}
+```
+
+## Using the Default User
+
+Include the default `userId` in request bodies for endpoints that require it:
+
+<CodeGroup>
+```bash POST /api/branches
+curl -X POST http://localhost:8000/api/branches \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "My Learning Path",
+    "userId": "00000000-0000-0000-0000-000000000000"
+  }'
+```
+
+```bash GET /api/branches
+curl "http://localhost:8000/api/branches?userId=00000000-0000-0000-0000-000000000000"
+```
+</CodeGroup>
+
+## Future Authentication
+
+In production, you would:
+
+1. Implement proper user registration/login
+2. Use JWT tokens or session cookies
+3. Add authentication middleware to verify requests
+4. Replace the default user with real user accounts
+
+<Warning>
+The default user authentication is **not suitable for production**. It's designed for local development and testing only.
+</Warning>
+
+## Required User Fields
+
+Most endpoints require a `userId` parameter:
+
+<ParamField path="userId" type="string" required>
+  The UUID of the user. Use the default user ID for development:
+  `00000000-0000-0000-0000-000000000000`
+</ParamField>
+
+## Example: Creating a Branch
+
+```bash
+curl -X POST http://localhost:8000/api/branches \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Machine Learning Fundamentals",
+    "userId": "00000000-0000-0000-0000-000000000000"
+  }'
+```
+
+Response:
+```json
+{
+  "id": "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d",
+  "title": "Machine Learning Fundamentals",
+  "userId": "00000000-0000-0000-0000-000000000000",
+  "createdAt": "2024-01-15T10:30:00.000Z",
+  "updatedAt": "2024-01-15T10:30:00.000Z"
+}
+```

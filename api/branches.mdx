@@ -1,0 +1,182 @@
+---
+title: Branches
+description: Branch endpoints for managing learning collections
+---
+
+Branches are top-level containers for learning topics. Each branch belongs to a user and contains a collection of topic nodes.
+
+## List Branches
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/api/branches?userId=00000000-0000-0000-0000-000000000000"
+```
+</CodeGroup>
+
+**GET** `/api/branches`
+
+Retrieve all branches for a user.
+
+### Query Parameters
+
+<ParamField query="userId" type="string" required>
+  The UUID of the user whose branches to retrieve
+</ParamField>
+
+### Response
+
+<ResponseField name="[]" type="array">
+  Array of branch objects
+  <ResponseField name="id" type="string">
+    Branch UUID
+  </ResponseField>
+  <ResponseField name="title" type="string">
+    Branch name
+  </ResponseField>
+  <ResponseField name="userId" type="string">
+    Owner user UUID
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+  <ResponseField name="updatedAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+---
+
+## Get Branch
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/api/branches/a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"
+```
+</CodeGroup>
+
+**GET** `/api/branches/:id`
+
+Retrieve a single branch by ID.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  Branch UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string">
+  Branch UUID
+</ResponseField>
+<ResponseField name="title" type="string">
+  Branch name
+</ResponseField>
+<ResponseField name="userId" type="string">
+  Owner user UUID
+</ResponseField>
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp
+</ResponseField>
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp
+</ResponseField>
+
+---
+
+## Create Branch
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/branches \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Data Structures",
+    "userId": "00000000-0000-0000-0000-000000000000"
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/branches`
+
+Create a new branch.
+
+### Body Parameters
+
+<ParamField body="title" type="string" required>
+  Name of the branch
+</ParamField>
+
+<ParamField body="userId" type="string" required>
+  UUID of the user creating the branch
+</ParamField>
+
+### Response
+
+**Status:** `201 Created`
+
+Returns the created branch object.
+
+---
+
+## Update Branch
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH http://localhost:8000/api/branches/a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Advanced Data Structures"
+  }'
+```
+</CodeGroup>
+
+**PATCH** `/api/branches/:id`
+
+Update a branch's title.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  Branch UUID
+</ParamField>
+
+### Body Parameters
+
+<ParamField body="title" type="string">
+  New title for the branch
+</ParamField>
+
+### Response
+
+Returns the updated branch object with a new `updatedAt` timestamp.
+
+---
+
+## Delete Branch
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE http://localhost:8000/api/branches/a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d
+```
+</CodeGroup>
+
+**DELETE** `/api/branches/:id`
+
+Delete a branch and **all associated data** (nodes, edges, assessments, questions, answers, chat sessions, progress records).
+
+<Warning>
+This is a destructive operation that cascades through the entire learning graph. All child nodes, assessments, and student progress will be permanently deleted.
+</Warning>
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  Branch UUID
+</ParamField>
+
+### Response
+
+**Status:** `204 No Content`
+
+No response body on success.

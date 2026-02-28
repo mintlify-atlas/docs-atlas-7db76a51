@@ -1,0 +1,433 @@
+---
+title: Grading agent
+description: Evaluates diagnostic answers with semantic understanding and detailed feedback
+---
+
+## Purpose
+
+The Grading Agent evaluates student answers to diagnostic questions, providing:
+- Correctness determination (true/false)
+- Numerical scores (0-1 scale)
+- Detailed feedback explaining why answers are correct or incorrect
+- Identification of misconceptions
+
+**Location**: `sprout-backend/src/agents/grade-answers.ts`
+
+## Grading approaches
+
+The agent uses different strategies based on question format:
+
+### MCQ grading
+
+<Tabs>
+  <Tab title="Direct comparison">
+    MCQ questions are graded by direct string comparison:
+    
+    ```typescript
+    function gradeMCQ(question: Question, answer: Answer): GradingResult {
+      const isCorrect = answer.selectedOption === question.correctAnswer;
+      
+      return {
+        isCorrect,
+        score: isCorrect ? 1.0 : 0.0,
+        feedback: isCorrect 
+          ? `Correct! ${question.correctAnswer} is the right answer.`
+          : `Incorrect. The correct answer is ${question.correctAnswer}.`
+      };
+    }
+    ```
+    
+    **Fast**: No Claude API call needed.
+  </Tab>
+  
+  <Tab title="Partial credit">
+    For MCQ questions with multiple correct answers:
+    
+    ```typescript
+    function gradeMultiSelectMCQ(question: Question, answer: Answer): GradingResult {
+      const selected = new Set(answer.selectedOptions);
+      const correct = new Set(question.correctAnswers);
+      
+      const correctSelected = intersection(selected, correct).size;
+      const incorrectSelected = selected.size - correctSelected;
+      const missed = correct.size - correctSelected;
+      
+      const score = Math.max(0, correctSelected - incorrectSelected) / correct.size;
+      
+      return {
+        isCorrect: score === 1.0,
+        score,
+        feedback: generatePartialCreditFeedback(correctSelected, incorrectSelected, missed)
+      };
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Open-ended grading
+
+Open-ended questions require semantic evaluation with Claude:
+
+```typescript
+async function gradeOpenEnded(
+  question: Question,
+  answer: Answer
+): Promise<GradingResult> {
+  const systemPrompt = `
+    You are an expert grader evaluating a student's answer.
+    
+    Question: ${question.prompt}
+    
+    Correct answer: ${question.correctAnswer}
+    
+    Grading rubric:
+    ${JSON.stringify(question.gradingRubric, null, 2)}
+    
+    Student answer: ${answer.answerText}
+    
+    Evaluate the answer:
+    1. Is it correct? (true/false)
+    2. Score from 0.0 to 1.0
+    3. Detailed feedback (2-3 sentences)
+    4. Identified misconceptions (if any)
+  `;
+  
+  const response = await anthropic.messages.create({
+    model: "claude-opus-4-20250514",
+    max_tokens: 2000,
+    system: systemPrompt,
+    messages: [{
+      role: "user",
+      content: "Grade this answer."
+    }]
+  });
+  
+  // Parse Claude's response
+  const result = parseGradingResponse(response.content[0].text);
+  
+  return result;
+}
+```
+
+<Info>
+  Claude evaluates open-ended answers semantically, not just by keyword matching. This allows it to recognize correct answers expressed differently than expected.
+</Info>
+
+## Grading rubrics
+
+Open-ended questions include rubrics that guide the grading agent:
+
+### Key points rubric
+
+```json
+{
+  "type": "key_points",
+  "points": [
+    "Binary search tree maintains sorted order",
+    "Left subtree contains smaller values",
+    "Right subtree contains larger values",
+    "Property applies recursively to all subtrees"
+  ],
+  "scoring": {
+    "all_points": 1.0,
+    "most_points": 0.75,
+    "some_points": 0.5,
+    "few_points": 0.25,
+    "no_points": 0.0
+  },
+  "min_points_for_passing": 3
+}
+```
+
+**Grading logic**:
+- Count how many key points the student mentioned
+- Award score based on percentage of points covered
+- Provide feedback listing which points were missed
+
+### Comparative rubric
+
+```json
+{
+  "type": "comparative",
+  "reference_answer": "In-order traversal visits nodes in sorted order: left subtree, root, right subtree. Pre-order visits root first, then left, then right.",
+  "required_elements": [
+    "in-order produces sorted sequence",
+    "pre-order visits root first"
+  ],
+  "scoring": {
+    "excellent": { "threshold": 0.9, "score": 1.0 },
+    "good": { "threshold": 0.7, "score": 0.85 },
+    "acceptable": { "threshold": 0.5, "score": 0.7 },
+    "poor": { "threshold": 0.3, "score": 0.5 },
+    "failing": { "threshold": 0.0, "score": 0.0 }
+  }
+}
+```
+
+**Grading logic**:
+- Compare student answer to reference answer using semantic similarity
+- Check for required elements
+- Award score based on similarity tier
+
+### Code execution rubric
+
+For code questions, the rubric includes test cases:
+
+```json
+{
+  "type": "code_execution",
+  "language": "python",
+  "test_cases": [
+    {
+      "input": "search(tree, 5)",
+      "expected_output": "True",
+      "weight": 0.2
+    },
+    {
+      "input": "search(tree, 7)",
+      "expected_output": "False",
+      "weight": 0.2
+    },
+    {
+      "input": "search(None, 5)",
+      "expected_output": "False",
+      "weight": 0.3,
+      "description": "Edge case: empty tree"
+    },
+    {
+      "input": "search(single_node, 1)",
+      "expected_output": "True",
+      "weight": 0.3,
+      "description": "Edge case: single node"
+    }
+  ],
+  "code_quality_weight": 0.2
+}
+```
+
+**Grading logic**:
+- Execute student code against test cases
+- Calculate weighted score based on passed tests
+- Claude evaluates code quality (readability, efficiency) for remaining 20%
+
+## Feedback generation
+
+The grading agent provides three types of feedback:
+
+### Correct answer feedback
+
+```json
+{
+  "isCorrect": true,
+  "score": 1.0,
+  "feedback": "Excellent! You correctly identified that in-order traversal produces a sorted sequence. Your explanation of the recursive process was clear and accurate."
+}
+```
+
+### Partially correct feedback
+
+```json
+{
+  "isCorrect": false,
+  "score": 0.6,
+  "feedback": "You're on the right track. You correctly mentioned that the left subtree contains smaller values, but you missed that the right subtree contains larger values. Also, remember that this property applies recursively to all subtrees, not just the root's children.",
+  "misconceptions": [
+    "Thinks BST property only applies to root level"
+  ]
+}
+```
+
+### Incorrect answer feedback
+
+```json
+{
+  "isCorrect": false,
+  "score": 0.0,
+  "feedback": "This isn't correct. A binary search tree has a specific ordering property: for every node, all values in the left subtree are smaller, and all values in the right subtree are larger. Review the BST properties and try again.",
+  "misconceptions": [
+    "Confuses BST with general binary tree",
+    "Doesn't understand sorted order property"
+  ],
+  "suggested_review": ["BST Properties", "Tree Ordering"]
+}
+```
+
+<Tip>
+  Good feedback explains why an answer is correct or incorrect, identifies specific misconceptions, and suggests what to review. This helps students learn from their mistakes.
+</Tip>
+
+## Misconception detection
+
+The grading agent identifies common misconceptions:
+
+| Misconception | Detected When | Feedback |
+|---------------|---------------|----------|
+| Confuses in-order with pre-order | Student describes pre-order as producing sorted sequence | "In-order traversal visits left-root-right and produces sorted output. You described pre-order (root-left-right)." |
+| Thinks BST property is only at root | Student only checks root's immediate children | "The BST property must hold for every node, not just the root. All nodes in the left subtree (not just the left child) must be smaller." |
+| Forgets edge cases in deletion | Student doesn't handle two-children case | "You handled leaf and one-child cases well, but deletion with two children requires finding the in-order successor or predecessor." |
+| Confuses time complexity | Student claims O(log n) is worst case | "O(log n) is the average case for balanced BSTs. Worst case is O(n) for a skewed tree (essentially a linked list)." |
+
+## Batch grading
+
+The `grade_student_answers` tool grades all diagnostic questions at once:
+
+```typescript
+async function gradeAllDiagnostics(
+  conceptNodeId: string,
+  userId: string
+): Promise<GradingSummary> {
+  // Load questions and answers
+  const assessment = await db.query.assessments.findFirst({
+    where: and(
+      eq(assessments.targetNodeId, conceptNodeId),
+      eq(assessments.userId, userId)
+    ),
+    with: {
+      questions: true
+    }
+  });
+  
+  const answers = await db.query.answers.findMany({
+    where: eq(answers.assessmentId, assessment.id)
+  });
+  
+  // Grade each answer
+  const gradingResults = await Promise.all(
+    answers.map(async (answer) => {
+      const question = assessment.questions.find(q => q.id === answer.questionId);
+      
+      if (question.format === "mcq") {
+        return gradeMCQ(question, answer);
+      } else {
+        return await gradeOpenEnded(question, answer);
+      }
+    })
+  );
+  
+  // Update database with grades
+  await db.transaction(async (tx) => {
+    for (let i = 0; i < answers.length; i++) {
+      await tx.update(answers)
+        .set({
+          isCorrect: gradingResults[i].isCorrect,
+          score: gradingResults[i].score,
+          feedback: gradingResults[i].feedback
+        })
+        .where(eq(answers.id, answers[i].id));
+    }
+  });
+  
+  // Generate summary
+  const summary = {
+    total_questions: answers.length,
+    correct: gradingResults.filter(r => r.isCorrect).length,
+    incorrect: gradingResults.filter(r => !r.isCorrect).length,
+    average_score: average(gradingResults.map(r => r.score)),
+    weak_areas: identifyWeakAreas(gradingResults, assessment.questions),
+    strong_areas: identifyStrongAreas(gradingResults, assessment.questions),
+    misconceptions: gradingResults
+      .flatMap(r => r.misconceptions || [])
+      .filter((m, i, arr) => arr.indexOf(m) === i) // unique
+  };
+  
+  return summary;
+}
+```
+
+<Info>
+  Batch grading is more efficient than grading one question at a time. It allows the Concept Refinement Agent to see the full picture of student performance.
+</Info>
+
+## Example grading flow
+
+<Steps>
+  <Step title="Student submits answers">
+    Student completes diagnostic assessment with 8 questions (5 MCQ, 3 open-ended).
+  </Step>
+  
+  <Step title="Concept Refinement Agent calls grade_student_answers">
+    ```json
+    grade_student_answers({ "conceptNodeId": "concept-uuid-123" })
+    ```
+  </Step>
+  
+  <Step title="Grading agent evaluates each answer">
+    - MCQ questions: Direct comparison (instant)
+    - Open-ended questions: Claude evaluation (2-5 seconds each)
+  </Step>
+  
+  <Step title="Database updated with grades">
+    Each answer record receives:
+    - `isCorrect`: boolean
+    - `score`: 0-1
+    - `feedback`: string
+  </Step>
+  
+  <Step title="Summary returned">
+    ```json
+    {
+      "total_questions": 8,
+      "correct": 5,
+      "incorrect": 3,
+      "average_score": 0.625,
+      "weak_areas": ["deletion", "balancing"],
+      "strong_areas": ["searching", "insertion"],
+      "misconceptions": [
+        "Confuses in-order with pre-order traversal"
+      ]
+    }
+    ```
+  </Step>
+  
+  <Step title="Refinement agent adapts learning path">
+    Uses summary to add bridge subconcepts for weak areas.
+  </Step>
+</Steps>
+
+## Performance considerations
+
+**Token usage per answer**:
+- MCQ: 0 tokens (no API call)
+- Open-ended (short): 500-1,000 tokens
+- Open-ended (long): 1,000-2,000 tokens
+
+**Typical diagnostic (8 questions)**:
+- 5 MCQ: 0 tokens
+- 3 open-ended: 3,000-6,000 tokens
+- Total: 3,000-6,000 tokens
+
+**Latency**:
+- MCQ: under 10ms per question
+- Open-ended: 2-5 seconds per question
+- Typical diagnostic: 6-15 seconds total
+
+<Note>
+  Grading happens in parallel for open-ended questions, so latency is determined by the slowest question, not the sum of all questions.
+</Note>
+
+## API integration
+
+The grading agent is called by the Concept Refinement Agent:
+
+```http
+POST /api/agents/concepts/:conceptNodeId/run
+```
+
+When diagnostic answers exist, the refinement agent:
+1. Calls `grade_student_answers` tool
+2. Receives grading summary
+3. Uses summary to adapt the learning path
+
+Students don't directly interact with the grading agent - it runs behind the scenes.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Refinement Agent" icon="wand-magic-sparkles" href="/agents/refinement-agent">
+    See how grading results drive path adaptation
+  </Card>
+  
+  <Card title="Diagnostics" icon="clipboard-question" href="/learning/diagnostics">
+    Learn about the diagnostic assessment flow
+  </Card>
+</CardGroup>

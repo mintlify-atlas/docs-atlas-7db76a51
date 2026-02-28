@@ -1,0 +1,317 @@
+---
+title: Nodes
+description: Node endpoints for managing the learning graph
+---
+
+Nodes represent the learning graph hierarchy: **topics** (root), **concepts**, and **subconcepts**. They form a directed acyclic graph (DAG) with dependency edges.
+
+## List Nodes
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/api/nodes?userId=00000000-0000-0000-0000-000000000000&type=concept&branchId=abc123"
+```
+</CodeGroup>
+
+**GET** `/api/nodes`
+
+List nodes with optional filters.
+
+### Query Parameters
+
+<ParamField query="userId" type="string">
+  Filter by user UUID
+</ParamField>
+
+<ParamField query="type" type="string">
+  Filter by node type: `root`, `concept`, or `subconcept`
+</ParamField>
+
+<ParamField query="branchId" type="string">
+  Filter by branch UUID
+</ParamField>
+
+<ParamField query="parentId" type="string">
+  Filter by parent node UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="[]" type="array">
+  Array of node objects
+  <ResponseField name="id" type="string">
+    Node UUID
+  </ResponseField>
+  <ResponseField name="userId" type="string">
+    Owner UUID
+  </ResponseField>
+  <ResponseField name="type" type="string">
+    `root`, `concept`, or `subconcept`
+  </ResponseField>
+  <ResponseField name="branchId" type="string | null">
+    Branch UUID
+  </ResponseField>
+  <ResponseField name="parentId" type="string | null">
+    Parent node UUID
+  </ResponseField>
+  <ResponseField name="title" type="string">
+    Node title
+  </ResponseField>
+  <ResponseField name="desc" type="string | null">
+    Node description
+  </ResponseField>
+  <ResponseField name="accuracyScore" type="number">
+    Accuracy score (0-1)
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+  <ResponseField name="updatedAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+---
+
+## Get Node
+
+**GET** `/api/nodes/:id`
+
+Retrieve a single node by ID.
+
+---
+
+## Get Node Children
+
+**GET** `/api/nodes/:id/children`
+
+Retrieve all direct children of a node.
+
+---
+
+## Get Dependency Edges
+
+<CodeGroup>
+```bash cURL
+curl "http://localhost:8000/api/nodes/abc123/dependency-edges?childType=subconcept"
+```
+</CodeGroup>
+
+**GET** `/api/nodes/:id/dependency-edges`
+
+Retrieve dependency edges between direct children of a parent node.
+
+### Query Parameters
+
+<ParamField query="childType" type="string">
+  Filter child nodes by type: `concept` or `subconcept`
+</ParamField>
+
+### Response
+
+<ResponseField name="[]" type="array">
+  Array of edge objects
+  <ResponseField name="id" type="string">
+    Edge UUID
+  </ResponseField>
+  <ResponseField name="sourceNodeId" type="string">
+    Prerequisite node UUID
+  </ResponseField>
+  <ResponseField name="targetNodeId" type="string">
+    Dependent node UUID
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+---
+
+## Create Node
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/nodes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "00000000-0000-0000-0000-000000000000",
+    "type": "root",
+    "title": "Introduction to Algorithms",
+    "desc": "Learn fundamental algorithms and data structures",
+    "branchId": "abc123"
+  }'
+```
+</CodeGroup>
+
+**POST** `/api/nodes`
+
+Create a new node.
+
+### Body Parameters
+
+<ParamField body="userId" type="string" required>
+  User UUID
+</ParamField>
+
+<ParamField body="type" type="string" required>
+  Node type: `root`, `concept`, or `subconcept`
+</ParamField>
+
+<ParamField body="title" type="string" required>
+  Node title
+</ParamField>
+
+<ParamField body="branchId" type="string">
+  Branch UUID (optional)
+</ParamField>
+
+<ParamField body="parentId" type="string">
+  Parent node UUID (optional)
+</ParamField>
+
+<ParamField body="desc" type="string">
+  Node description (optional)
+</ParamField>
+
+---
+
+## Update Node
+
+**PATCH** `/api/nodes/:id`
+
+Update a node's title, description, or accuracy score.
+
+### Body Parameters
+
+<ParamField body="title" type="string">
+  New title
+</ParamField>
+
+<ParamField body="desc" type="string">
+  New description
+</ParamField>
+
+<ParamField body="accuracyScore" type="number">
+  New accuracy score (0-1)
+</ParamField>
+
+---
+
+## Delete Node
+
+**DELETE** `/api/nodes/:id`
+
+Delete a node. Does not cascade to children.
+
+**Status:** `204 No Content`
+
+---
+
+## Node Contents
+
+### Get Contents
+
+**GET** `/api/nodes/:nodeId/contents`
+
+Retrieve all content versions for a node.
+
+### Get Active Content
+
+**GET** `/api/nodes/:nodeId/contents/active`
+
+Retrieve the active content for a node.
+
+<ResponseField name="id" type="string">
+  Content UUID
+</ResponseField>
+<ResponseField name="nodeId" type="string">
+  Node UUID
+</ResponseField>
+<ResponseField name="explanationMd" type="string">
+  Markdown explanation text
+</ResponseField>
+<ResponseField name="visualizationKind" type="string | null">
+  Visualization type: `mermaid`, `svg`, or `json`
+</ResponseField>
+<ResponseField name="visualizationPayload" type="string | null">
+  Visualization data
+</ResponseField>
+<ResponseField name="cards" type="string | null">
+  JSON array of learning cards: `[{ id, index, explanation, question, questionType }]`
+</ResponseField>
+<ResponseField name="status" type="string">
+  `draft`, `active`, or `archived`
+</ResponseField>
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp
+</ResponseField>
+
+### Create Content
+
+**POST** `/api/nodes/:nodeId/contents`
+
+Create new content for a node.
+
+---
+
+## Node Generations
+
+### Get Generations
+
+**GET** `/api/nodes/:nodeId/generations`
+
+Retrieve generation history for a node.
+
+<ResponseField name="[]" type="array">
+  <ResponseField name="id" type="string">
+    Generation UUID
+  </ResponseField>
+  <ResponseField name="nodeId" type="string">
+    Node UUID
+  </ResponseField>
+  <ResponseField name="trigger" type="string">
+    `on_first_enter`, `manual_regenerate`, or `system_refresh`
+  </ResponseField>
+  <ResponseField name="model" type="string">
+    AI model used (e.g., `claude-3-5-sonnet-20241022`)
+  </ResponseField>
+  <ResponseField name="prompt" type="string">
+    Generation prompt
+  </ResponseField>
+  <ResponseField name="responseMeta" type="string">
+    JSON metadata about the generation
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+---
+
+## Documents
+
+### Upload Documents
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/nodes/abc123/documents \
+  -F "files=@textbook.pdf" \
+  -F "files=@notes.md"
+```
+</CodeGroup>
+
+**POST** `/api/nodes/:nodeId/documents`
+
+Upload documents for a topic node. Accepts PDF, plain text, and Markdown files (max 10MB each, up to 5 files).
+
+### List Documents
+
+**GET** `/api/nodes/:nodeId/documents`
+
+List all documents for a node.
+
+### Delete Document
+
+**DELETE** `/api/nodes/:nodeId/documents/:documentId`
+
+Delete a document from S3 and the database.

@@ -1,0 +1,219 @@
+---
+title: Welcome to Sprout
+description: AI-powered adaptive learning platform that builds personalized 3D knowledge graphs
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Hero Dark"
+/>
+
+## Transform how you learn
+
+Sprout is an adaptive learning platform that creates personalized 3D knowledge graphs on any topic. Powered by seven specialized Claude AI agents, Sprout generates interactive learning pathways that adapt to your understanding in real-time.
+
+Built in 20 hours at a hackathon, Sprout reimagines AI-assisted learning by guiding you to discover answers yourself rather than simply providing them.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get up and running with Sprout in under 10 minutes
+  </Card>
+  <Card
+    title="Architecture Overview"
+    icon="diagram-project"
+    href="/architecture/overview"
+  >
+    Explore the multi-agent system and 3D knowledge graphs
+  </Card>
+  <Card
+    title="API Reference"
+    icon="code"
+    href="/api/overview"
+  >
+    Complete REST API documentation for integration
+  </Card>
+  <Card
+    title="Hand Tracking Setup"
+    icon="hand"
+    href="/features/hand-tracking"
+  >
+    Navigate your knowledge graph with natural hand movements
+  </Card>
+</CardGroup>
+
+## Core Features
+
+### 3D Knowledge Graphs
+
+Visualize learning pathways as interactive three-dimensional networks. Each concept becomes a node you can explore, with edges representing prerequisite relationships. Navigate using your mouse, keyboard, or natural hand movements via OpenCV.
+
+### Seven Autonomous Agents
+
+Sprout's AI architecture orchestrates specialized Claude-powered agents that work together:
+
+- **Topic Agent** - Breaks topics into 6-10 prerequisite-linked concepts
+- **Subconcept Bootstrap Agent** - Generates 8-12 subconcepts and diagnostic questions per concept  
+- **Concept Refinement Agent** - Personalizes learning paths based on diagnostic performance
+- **Tutor Chat Agent** - Teaches concepts chunk-by-chunk with interactive exercises
+- **Grade Answers Agent** - Provides detailed scoring and feedback
+- **Generate Diagnostic Agent** - Creates mixed-format assessments (MCQ and open-ended)
+- **Review Learning Path Agent** - Recommends enrichment and remediation after completion
+
+<Info>
+  All agents use a shared tool-calling loop that streams real-time progress via Server-Sent Events (SSE), giving you visibility into the AI's reasoning process.
+</Info>
+
+### Adaptive Diagnostics
+
+Before diving into a concept, Sprout assesses your current understanding with targeted diagnostic questions. Based on your answers, the Concept Refinement Agent restructures the subconcept graph to fill knowledge gaps or skip mastered material.
+
+```typescript
+// Example: Concept refinement flow from src/agents/concept-agent.ts
+const tools = [
+  { name: "grade_student_answers", ... },
+  { name: "get_current_subconcepts", ... },
+  { name: "check_student_history", ... },
+  { name: "add_subconcept", ... },
+  { name: "remove_subconcept", ... },
+  { name: "add_prerequisite_concept", ... },
+  { name: "validate_graph", ... }
+];
+```
+
+### Interactive Tutoring
+
+The Tutor Agent breaks each subconcept into digestible chunks and guides you through with:
+
+- **Multi-format exercises** - Text, code, drawings, and quizzes
+- **Worked examples** - Step-by-step demonstrations
+- **Mastery tracking** - Progress persists across sessions
+- **Voice support** - Powered by ElevenLabs for audio guidance
+
+<Note>
+  Sprout follows one core methodology: the learner should reach the answer themselves. The AI is there to show the path, not give the solution.
+</Note>
+
+### Document Upload & Context
+
+Upload PDFs, notes, or course materials when creating a topic. Sprout extracts relevant context and embeds it into concept nodes, ensuring the learning path aligns with your specific materials.
+
+```bash
+# S3 document storage configured via backend/.env
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret  
+AWS_REGION=us-east-1
+AWS_S3_BUCKET=your-bucket
+```
+
+## Technology Stack
+
+<CardGroup cols={2}>
+  <Card title="Backend" icon="server">
+    - Express 5 + TypeScript
+    - Anthropic Claude SDK
+    - Drizzle ORM + SQLite
+    - AWS S3 for documents
+    - Server-Sent Events (SSE)
+  </Card>
+  <Card title="Frontend" icon="browser">
+    - Next.js 16 + React 19
+    - Three.js & React Flow
+    - WebSocket hand tracking
+    - Tailwind CSS v4
+    - shadcn/ui components
+  </Card>
+  <Card title="Computer Vision" icon="camera">
+    - Python 3.11+
+    - OpenCV + MediaPipe
+    - WebSocket server (port 8765)
+    - Real-time hand landmark detection
+  </Card>
+  <Card title="AI/ML" icon="brain">
+    - Anthropic Claude 3.5
+    - Multi-agent orchestration
+    - Tool-calling loops
+    - Streaming responses
+  </Card>
+</CardGroup>
+
+## What Makes Sprout Different
+
+Oxford University Press found that 80% of students rely on AI for schoolwork, and 62% say it's making them worse at learning. AI tools are here to stay—the question is how students use them.
+
+Sprout doesn't just give answers. It:
+
+1. **Diagnoses understanding** through adaptive assessments
+2. **Personalizes structure** by restructuring knowledge graphs based on your performance
+3. **Guides discovery** with Socratic tutoring that leads you to insights
+4. **Tracks mastery** across concepts to ensure retention
+5. **Adapts in real-time** as you learn, adding remediation or enrichment dynamically
+
+<Warning>
+  Sprout is a single-user hackathon project with no authentication. All data is stored locally in SQLite. Do not use for production or multi-user scenarios without adding proper auth and database scaling.
+</Warning>
+
+## Example Workflow
+
+Here's how a typical learning session works:
+
+<Steps>
+  <Step title="Create a topic">
+    Describe what you want to learn: "Linear Algebra for Machine Learning" or "Fauna of Peru"
+  </Step>
+  <Step title="Upload materials (optional)">
+    Add lecture notes, PDFs, or course documents to provide context
+  </Step>
+  <Step title="Watch agents build your graph">
+    Stream real-time progress as agents generate 6-10 concepts and 8-12 subconcepts each
+  </Step>
+  <Step title="Take diagnostic assessments">
+    Answer MCQ and open-ended questions to gauge your current understanding
+  </Step>
+  <Step title="Explore personalized paths">
+    Navigate the adaptive 3D graph using mouse, keyboard, or hand tracking
+  </Step>
+  <Step title="Learn with the tutor">
+    Dive into concepts with interactive exercises, worked examples, and voice guidance
+  </Step>
+  <Step title="Track your progress">
+    View mastery scores and completed nodes across your knowledge network
+  </Step>
+</Steps>
+
+## Single-User Architecture
+
+Sprout uses a hardcoded default user for simplicity:
+
+```typescript
+// src/index.ts - Auto-seeded on backend startup
+const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+async function ensureDefaultUser() {
+  const existing = await db.select().from(users)
+    .where(eq(users.id, DEFAULT_USER_ID));
+  if (!existing.length) {
+    await db.insert(users).values({
+      id: DEFAULT_USER_ID,
+      email: "default@sprout.local",
+      title: "Default Learner",
+    });
+    console.log("Default user seeded.");
+  }
+}
+```
+
+## Get Started
+
+Ready to build your first knowledge graph? Head to the [Quick Start guide](/quickstart) to set up Sprout locally in under 10 minutes.
+
+For a deeper understanding of the agent architecture and workflows, check out the [Architecture Overview](/architecture).

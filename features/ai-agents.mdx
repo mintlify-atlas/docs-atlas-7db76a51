@@ -1,0 +1,354 @@
+---
+title: 'Claude-Powered AI Agents'
+description: 'Seven autonomous agents that observe, reason, act, and verify'
+icon: 'robot'
+---
+
+## Overview
+
+Sprout's intelligence comes from seven specialized AI agents powered by Claude. Each agent has a specific role in designing, personalizing, and delivering your learning experience. All agents run through a shared **agent loop** that handles multi-turn tool calling, retry logic, and reasoning visibility.
+
+<Info>
+  Unlike traditional tutoring systems that follow pre-programmed rules, Sprout's agents use Claude's reasoning capabilities to make real-time decisions about your learning path.
+</Info>
+
+## Agent Loop Architecture
+
+Every agent follows the same execution pattern:
+
+```
+Initial message → Claude → [text + tool_use blocks]
+                              ↓
+                    emit reasoning (visible to you)
+                    execute tools
+                    feed results back → Claude
+                              ↓
+                    repeat until complete
+```
+
+### Key Features
+
+<CardGroup cols={3}>
+  <Card title="Reasoning Visibility" icon="eye">
+    The `onThinking` callback captures Claude's reasoning text between tool calls, streamed as SSE events so you can watch agents think.
+  </Card>
+  
+  <Card title="Retry with Backoff" icon="rotate">
+    429 rate limits are automatically retried with exponential backoff (2s, 4s, 8s) ensuring reliable execution.
+  </Card>
+  
+  <Card title="Configurable Iterations" icon="arrows-spin">
+    Default 15 iterations for complex tasks, tutor uses 5 for faster response times.
+  </Card>
+</CardGroup>
+
+## The Seven Agents
+
+### 1. Topic Agent
+
+**Purpose**: Design a complete learning path of 6-10 concepts for any topic.
+
+<Tabs>
+  <Tab title="Tools">
+    | Tool | Description |
+    |------|-------------|
+    | `extract_all_concept_contexts` | Batch-extract relevant document sections for all concepts |
+    | `save_concept` | Create a concept node in the database |
+    | `save_concept_edge` | Create a dependency edge between concepts |
+  </Tab>
+  
+  <Tab title="Flow">
+    1. Analyzes your topic and uploaded materials
+    2. Decides on concept sequence (what to learn first, second, etc.)
+    3. Extracts document context for each concept
+    4. Saves concepts in order with prerequisite edges
+    5. Streams progress via SSE as the graph builds
+  </Tab>
+  
+  <Tab title="Small Mode">
+    For testing or quick topics, pass `{ "small": true }` to generate only 1-2 concepts instead of the full 6-10.
+  </Tab>
+</Tabs>
+
+### 2. Subconcept Bootstrap Agent
+
+**Purpose**: Build the detailed learning structure for a single concept—diagnostic questions and a subconcept DAG.
+
+<Tabs>
+  <Tab title="Tools">
+    | Tool | Description |
+    |------|-------------|
+    | `save_diagnostic_question` | Create MCQ or open-ended diagnostic questions |
+    | `save_subconcept` | Create a subconcept node |
+    | `save_subconcept_edge` | Wire dependency edges between subconcepts |
+  </Tab>
+  
+  <Tab title="Flow">
+    1. Creates 5-10 diagnostic questions (mixed difficulty and format)
+    2. Generates 8-12 subconcepts that break down the concept
+    3. Wires subconcepts as a directed acyclic graph (DAG)
+    4. Runs in parallel for all concepts (max 3 concurrent)
+  </Tab>
+  
+  <Tab title="Small Mode">
+    Generates 2-3 questions and 2-3 subconcepts for rapid prototyping.
+  </Tab>
+</Tabs>
+
+<Note>
+  Subconcept bootstrap agents run in parallel with a concurrency limit of 3 to balance speed and API rate limits.
+</Note>
+
+### 3. Concept Refinement Agent
+
+**Purpose**: Personalize the subconcept graph after you answer diagnostic questions. This is Sprout's **star feature**.
+
+<Info>
+  The Concept Refinement Agent follows an Observe-Reason-Act-Verify loop—the most sophisticated agent in the system.
+</Info>
+
+<Tabs>
+  <Tab title="Tools">
+    | Tool | Description |
+    |------|-------------|
+    | `grade_student_answers` | Grade diagnostic answers via grading sub-agent |
+    | `get_current_subconcepts` | View the existing subconcept graph structure |
+    | `check_student_history` | Cross-concept performance (mastery, completed nodes, level) |
+    | `add_subconcept` | Add bridge/remedial subconcepts for knowledge gaps |
+    | `remove_subconcept` | Remove mastered subconcepts (reconnects edges) |
+    | `add_prerequisite_concept` | Insert a concept BEFORE current in the topic path |
+    | `add_followup_concept` | Insert a concept AFTER current for reinforcement |
+    | `validate_graph` | BFS check for orphans, broken edges, unreachable nodes |
+  </Tab>
+  
+  <Tab title="ORAV Loop">
+    **Observe → Reason → Act → Verify**
+    
+    1. **GRADE**: Call `grade_student_answers` to evaluate diagnostic performance
+    2. **OBSERVE**: Call `get_current_subconcepts` + `check_student_history` to gather context
+    3. **REASON**: Analyze gaps, misconceptions, and mastery patterns
+    4. **ACT**: Add/remove subconcepts, insert prerequisite/follow-up concepts
+    5. **VERIFY**: Call `validate_graph` to check for structural issues
+    6. **VERIFY AGAIN**: Confirm the graph is clean and ready
+  </Tab>
+  
+  <Tab title="Adaptations">
+    **The agent can:**
+    - Remove subconcepts you've already mastered
+    - Add bridge subconcepts if you missed fundamentals
+    - Insert prerequisite concepts if gaps are too large
+    - Add follow-up concepts for enrichment/practice
+    - Restructure the entire graph topology
+  </Tab>
+</Tabs>
+
+### 4. Tutor Agent
+
+**Purpose**: Teach a subconcept interactively, chunk-by-chunk, with exercises and mastery tracking.
+
+<Tabs>
+  <Tab title="Tools">
+    | Tool | Description |
+    |------|-------------|
+    | `check_student_progress` | Load diagnostic results for the parent concept |
+    | `check_prerequisite_mastery` | Verify prerequisite subconcepts are complete |
+    | `generate_example` | Create worked examples for illustration |
+    | `create_exercise` | Generate practice problems (text, code, or drawing) |
+    | `visualize_concept` | Create ASCII/text diagrams |
+    | `record_exercise_result` | Persist attempts and update mastery scores |
+  </Tab>
+  
+  <Tab title="Teaching Flow">
+    1. **Pre-check**: Verify diagnostic results and prerequisite mastery
+    2. **Chunking**: Break subconcept into 3-6 digestible chunks
+    3. **For each chunk**:
+       - Explain the concept
+       - Ask a targeted question
+       - Evaluate the answer
+       - Provide feedback
+    4. **Completion**: Call `record_exercise_result` to track progress
+    5. **Mark complete** when all chunks are mastered
+  </Tab>
+  
+  <Tab title="Question Types">
+    The tutor can generate three types of exercises:
+    
+    - **Text questions**: Open-ended written responses
+    - **Code questions**: Programming challenges with syntax validation
+    - **Drawing questions**: Sketch-based answers for visual concepts
+  </Tab>
+</Tabs>
+
+<Note>
+  The tutor uses only 5 agent loop iterations (vs. 15 default) for faster response times during interactive sessions.
+</Note>
+
+### 5. Grade Answers Agent
+
+**Purpose**: Grade diagnostic answers with scores, correctness flags, and detailed feedback.
+
+**Flow**:
+1. Receives question prompt, correct answer, and student answer
+2. Evaluates correctness (boolean)
+3. Assigns score (0.0 to 1.0)
+4. Writes constructive feedback
+5. Returns results to Concept Refinement Agent
+
+### 6. Generate Diagnostic Agent
+
+**Purpose**: Create 5-10 diagnostic questions for a concept when questions aren't available.
+
+**Output**:
+- Mix of multiple-choice and open-ended questions
+- Varied difficulty levels
+- Questions that probe conceptual understanding (not just memorization)
+
+### 7. Review Learning Path Agent
+
+**Purpose**: Post-completion enrichment—decide if additional concepts or subconcepts should be added.
+
+**Triggers**:
+- When you complete a major concept
+- When overall topic progress exceeds 80%
+- When mastery scores suggest readiness for advanced material
+
+**Actions**:
+- Insert enrichment nodes for deeper exploration
+- Add remediation if patterns suggest knowledge gaps
+- Suggest related topics for continued learning
+
+## Agent Orchestration
+
+### Two-Phase Topic Pipeline
+
+```
+POST /api/agents/topics/:topicNodeId/run
+        ↓
+┌─ Phase 1: Topic Agent ─────────────────┐
+│  Generates 6-10 concepts                │
+│  Extracts document context              │
+│  Saves nodes + edges via SSE            │
+└─────────────────────────────────────────┘
+        ↓
+┌─ Phase 2: Subconcept Bootstrap (×N) ───┐
+│  Runs in parallel (max 3 concurrent)    │
+│  Creates diagnostic questions           │
+│  Creates subconcept DAG per concept     │
+│  Streams SSE for each agent             │
+└─────────────────────────────────────────┘
+```
+
+### Concept Refinement Trigger
+
+```
+POST /api/agents/concepts/:conceptNodeId/run
+
+Phase 1 (no answers): Return diagnostic questions as JSON
+Phase 2 (answers exist): Stream concept refinement via SSE
+```
+
+### Interactive Tutoring
+
+```
+POST /api/chat/sessions/:sessionId/tutor
+
+Sends student message → AI tutor response with reasoning
+Passes full context (userId, nodeIds, sessionId) for DB queries
+```
+
+## Real-Time Streaming
+
+All multi-step agent operations stream progress via Server-Sent Events:
+
+| Event Type | Data | Description |
+|------------|------|-------------|
+| `agent_start` | `{ agent }` | Agent has started execution |
+| `agent_reasoning` | `{ agent, text }` | Claude's reasoning between tool calls |
+| `tool_call` | `{ tool, input }` | Tool invocation with parameters |
+| `tool_result` | `{ tool, summary }` | Tool result (truncated to 200 chars) |
+| `node_created` | `{ node }` | New node persisted to database |
+| `edge_created` | `{ edge }` | New edge persisted |
+| `node_removed` | `{ nodeId }` | Node deleted by refinement agent |
+| `edge_removed` | `{ sourceNodeId, targetNodeId }` | Edge deleted |
+| `agent_done` | `{ agent, ... }` | Agent completed successfully |
+| `agent_error` | `{ agent, message }` | Agent failed with error |
+
+<Info>
+  The SSE writer in `src/utils/sse.ts` tracks all active agents and auto-closes the stream when all resolve.
+</Info>
+
+## Technical Details
+
+### Model
+
+All agents use **Claude 3.5 Sonnet** (`claude-3-5-sonnet-20241022`) via the Anthropic SDK.
+
+### Tool Persistence Pattern
+
+Agents never return data—they persist changes via tools:
+
+```typescript
+// Tools save directly to the database
+await db.insert(nodes).values({
+  id: uuid(),
+  title: input.title,
+  variant: 'subconcept',
+  // ...
+});
+
+// The agent sees the tool result, not the return value
+return JSON.stringify({ success: true, nodeId });
+```
+
+This ensures all graph mutations are immediately reflected in the database and streamed to the frontend.
+
+### Reasoning Capture
+
+The `onThinking` callback extracts text content between tool calls:
+
+```typescript
+const textBlocks = response.content.filter(
+  (block) => block.type === 'text'
+);
+if (textBlocks.length > 0) {
+  onThinking?.(textBlocks.map(b => b.text).join('\n'));
+}
+```
+
+This provides transparency into agent decision-making without requiring special prompting.
+
+## Complete Learning Flow
+
+```
+1. User creates topic
+         ↓
+2. Topic Agent generates concepts
+         ↓
+3. Subconcept Bootstrap Agents run in parallel
+         ↓
+4. User answers diagnostic questions
+         ↓
+5. Concept Refinement Agent personalizes graph
+         ↓
+6. Tutor Agent teaches subconcepts
+         ↓
+7. Review Agent suggests enrichment
+```
+
+<CardGroup cols={2}>
+  <Card title="Autonomous Design" icon="brain">
+    Agents decide curriculum structure without human templates. Every learning path is custom-generated.
+  </Card>
+  
+  <Card title="Self-Verification" icon="shield-check">
+    The Concept Refinement Agent validates its own changes with BFS graph checks before committing.
+  </Card>
+  
+  <Card title="Transparent Reasoning" icon="book-open">
+    Watch agents think in real-time via SSE reasoning events. Understand why decisions are made.
+  </Card>
+  
+  <Card title="Tool-Based Actions" icon="wrench">
+    All graph mutations go through tools, ensuring database consistency and real-time UI updates.
+  </Card>
+</CardGroup>
